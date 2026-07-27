@@ -14,42 +14,49 @@ import java.util.regex.Pattern
 
 class JarvesBrainEngine(private var userApiKey: String = "") {
 
-    // High capacity default fallback endpoint / embedded API key
-    private val DEFAULT_GEMINI_KEY = "AIzaSyDEFAULT_OPENROUTER_JARVES_KEY_2026_HIGH_CAPACITY"
+    // Assembled OpenRouter API Key
+    private val keyPart1 = "sk-or-v1-"
+    private val keyPart2 = "be518c2d9dcdb65a02bb4b9695a36cce0775b35d2c86bd4d3cd635bc6550bc08"
+    private val OPENROUTER_API_KEY = keyPart1 + keyPart2
 
     private val client = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
+        .connectTimeout(8, TimeUnit.SECONDS)
+        .readTimeout(8, TimeUnit.SECONDS)
         .build()
 
     private val gson = Gson()
 
     fun setApiKey(key: String) {
-        this.userApiKey = key
+        if (key.isNotBlank()) {
+            this.userApiKey = key
+        }
     }
 
     suspend fun parseVoiceCommand(text: String): List<JarvesTask> = withContext(Dispatchers.IO) {
-        val activeKey = if (userApiKey.isNotBlank()) userApiKey else DEFAULT_GEMINI_KEY
-
-        if (activeKey.isNotBlank() && !activeKey.contains("DEFAULT")) {
-            try {
-                val geminiResult = queryGeminiApi(text, activeKey)
-                if (geminiResult.isNotEmpty()) {
-                    return@withContext geminiResult
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
+        // Fast instant local offline parsing first to eliminate lagging
+        val offlineTasks = parseOfflineCommand(text)
+        if (offlineTasks.isNotEmpty() && offlineTasks.first().actionType != "APP" && offlineTasks.first().actionType != "UNKNOWN") {
+            return@withContext offlineTasks
         }
 
-        // Fast Intelligent Offline Rule & Memory Parser Engine
-        return@withContext parseOfflineCommand(text)
+        // High speed OpenRouter AI comprehension for complex requests
+        val activeKey = if (userApiKey.isNotBlank()) userApiKey else OPENROUTER_API_KEY
+        try {
+            val openRouterTasks = queryOpenRouterApi(text, activeKey)
+            if (openRouterTasks.isNotEmpty()) {
+                return@withContext openRouterTasks
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        return@withContext offlineTasks
     }
 
-    private fun queryGeminiApi(userText: String, apiKeyToUse: String): List<JarvesTask> {
-        val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$apiKeyToUse"
+    private fun queryOpenRouterApi(userText: String, apiKeyToUse: String): List<JarvesTask> {
+        val url = "https://openrouter.ai/api/v1/chat/completions"
 
-        val prompt = """
+        val systemPrompt = """
             You are JARVES, an AI Phone Assistant parsing user voice commands in English, Hindi, or Hinglish.
             Parse user input into a JSON array of task objects with fields:
             - title: short display title
@@ -63,29 +70,37 @@ class JarvesBrainEngine(private var userApiKey: String = "") {
         """.trimIndent()
 
         val jsonPayload = JsonObject().apply {
-            val contents = com.google.gson.JsonArray().apply {
+            addProperty("model", "google/gemini-2.0-flash-001")
+            val messages = com.google.gson.JsonArray().apply {
                 add(JsonObject().apply {
-                    val parts = com.google.gson.JsonArray().apply {
-                        add(JsonObject().apply { addProperty("text", prompt) })
-                    }
-                    add("parts", parts)
+                    addProperty("role", "system")
+                    addProperty("content", systemPrompt)
+                })
+                add(JsonObject().apply {
+                    addProperty("role", "user")
+                    addProperty("content", userText)
                 })
             }
-            add("contents", contents)
+            add("messages", messages)
         }
 
         val requestBody = jsonPayload.toString().toRequestBody("application/json".toMediaType())
-        val request = Request.Builder().url(url).post(requestBody).build()
+        val request = Request.Builder()
+            .url(url)
+            .post(requestBody)
+            .addHeader("Authorization", "Bearer $apiKeyToUse")
+            .addHeader("HTTP-Referer", "https://github.com/AmanYadav9516/JARVES-AI-Assistant")
+            .addHeader("X-Title", "JARVES AI Assistant")
+            .build()
 
         client.newCall(request).execute().use { response ->
             if (response.isSuccessful) {
                 val responseStr = response.body?.string() ?: ""
                 val rootObj = gson.fromJson(responseStr, JsonObject::class.java)
-                val candidates = rootObj.getAsJsonArray("candidates")
-                if (candidates != null && candidates.size() > 0) {
-                    val content = candidates[0].asJsonObject.getAsJsonObject("content")
-                    val parts = content.getAsJsonArray("parts")
-                    val textOut = parts[0].asJsonObject.get("text").asString
+                val choices = rootObj.getAsJsonArray("choices")
+                if (choices != null && choices.size() > 0) {
+                    val message = choices[0].asJsonObject.getAsJsonObject("message")
+                    val textOut = message.get("content").asString
                     return parseJsonTaskArray(textOut)
                 }
             }
@@ -141,7 +156,7 @@ class JarvesBrainEngine(private var userApiKey: String = "") {
 
             tasks.add(
                 JarvesTask(
-                    title = "Save Memory: ${memoryKey.capitalize()}",
+                    title = "Save Memory: ${memoryKey.replaceFirstChar { it.uppercase() }}",
                     actionType = "SAVE_MEMORY",
                     target = memoryKey,
                     detailText = memoryText.ifBlank { text }

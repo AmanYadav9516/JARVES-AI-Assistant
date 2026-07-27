@@ -10,6 +10,8 @@ import android.os.Bundle
 import android.provider.Settings
 import android.speech.RecognizerIntent
 import android.view.View
+import android.widget.AdapterView
+import android.widget.ArrayAdapter
 import android.widget.EditText
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -56,7 +58,7 @@ class MainActivity : AppCompatActivity(), TaskQueueManager.QueueListener {
             if (!isGranted) allGranted = false
         }
         if (allGranted) {
-            Toast.makeText(this, "Permissions granted!", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "JARVES Permissions Granted!", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -75,6 +77,7 @@ class MainActivity : AppCompatActivity(), TaskQueueManager.QueueListener {
         setupListeners()
         requestSystemPermissions()
         checkOverlayPermission()
+        checkWriteSettingsPermission()
         startForegroundService()
 
         TaskQueueManager.instance.addListener(this)
@@ -102,13 +105,10 @@ class MainActivity : AppCompatActivity(), TaskQueueManager.QueueListener {
             }
         }
 
-        binding.btnApiKey.setOnClickListener {
-            showApiKeyDialog()
-        }
-
         binding.btnPermissions.setOnClickListener {
             requestSystemPermissions()
             checkOverlayPermission()
+            checkWriteSettingsPermission()
         }
     }
 
@@ -116,7 +116,8 @@ class MainActivity : AppCompatActivity(), TaskQueueManager.QueueListener {
         showOverlayListening("Say command...")
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "hi-IN")
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "en-IN,hi-IN")
+            putExtra(RecognizerIntent.EXTRA_ONLY_RETURN_LANGUAGE_PREFERENCE, false)
             putExtra(RecognizerIntent.EXTRA_PROMPT, "JARVES Listening...")
         }
         try {
@@ -137,7 +138,7 @@ class MainActivity : AppCompatActivity(), TaskQueueManager.QueueListener {
             binding.tvStatus.text = getString(R.string.status_idle)
 
             if (parsedTasks.isEmpty()) {
-                executor.speak("I didn't quite catch that command.")
+                executor.speak("I didn't catch that command.")
                 return@launch
             }
 
@@ -145,7 +146,7 @@ class MainActivity : AppCompatActivity(), TaskQueueManager.QueueListener {
                 if (task.actionType == "DELETE_TASK") {
                     executor.execute(task)
                 } else {
-                    executor.speak("Received: ${task.title}")
+                    executor.speak("Processing ${task.title}")
                     TaskQueueManager.instance.addTask(this@MainActivity, task) { readyTask ->
                         executor.execute(readyTask)
                     }
@@ -188,26 +189,18 @@ class MainActivity : AppCompatActivity(), TaskQueueManager.QueueListener {
         }
     }
 
-    private fun showApiKeyDialog() {
-        val currentKey = prefs.getString("gemini_api_key", "") ?: ""
-        val etKey = EditText(this).apply {
-            setText(currentKey)
-            hint = "Enter Google Gemini API Key"
-            setPadding(40, 40, 40, 40)
-        }
-
-        AlertDialog.Builder(this)
-            .setTitle("Google Gemini API Key")
-            .setMessage("Set custom API key for enhanced AI comprehension:")
-            .setView(etKey)
-            .setPositiveButton("Save") { _, _ ->
-                val newKey = etKey.text.toString().trim()
-                prefs.edit().putString("gemini_api_key", newKey).apply()
-                brainEngine.setApiKey(newKey)
-                Toast.makeText(this, "Gemini API Key Saved!", Toast.LENGTH_SHORT).show()
+    private fun checkWriteSettingsPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.System.canWrite(this)) {
+            val intent = Intent(
+                Settings.ACTION_MANAGE_WRITE_SETTINGS,
+                Uri.parse("package:$packageName")
+            )
+            try {
+                startActivity(intent)
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
-            .setNegativeButton("Cancel", null)
-            .show()
+        }
     }
 
     private fun requestSystemPermissions() {
@@ -215,8 +208,11 @@ class MainActivity : AppCompatActivity(), TaskQueueManager.QueueListener {
             Manifest.permission.RECORD_AUDIO,
             Manifest.permission.CALL_PHONE,
             Manifest.permission.READ_CONTACTS,
+            Manifest.permission.READ_PHONE_STATE,
             Manifest.permission.SEND_SMS,
             Manifest.permission.CAMERA,
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION,
             Manifest.permission.READ_CALENDAR,
             Manifest.permission.WRITE_CALENDAR
         )

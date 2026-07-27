@@ -6,6 +6,9 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.hardware.Sensor
+import android.hardware.SensorManager
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
@@ -14,10 +17,19 @@ import com.jarves.assistant.R
 import com.jarves.assistant.engine.DeviceControlExecutor
 import com.jarves.assistant.engine.TaskQueueManager
 import com.jarves.assistant.model.JarvesTask
+import com.jarves.assistant.receiver.CallAnnouncerReceiver
+import com.jarves.assistant.receiver.PowerStateReceiver
+import com.jarves.assistant.sensor.ShakeDetector
 
 class JarvesService : Service(), TaskQueueManager.QueueListener {
 
     private lateinit var executor: DeviceControlExecutor
+    private var sensorManager: SensorManager? = null
+    private var shakeDetector: ShakeDetector? = null
+
+    private var powerStateReceiver: PowerStateReceiver? = null
+    private var callAnnouncerReceiver: CallAnnouncerReceiver? = null
+
     private val CHANNEL_ID = "jarves_service_channel"
     private val NOTIF_ID = 1001
 
@@ -26,10 +38,50 @@ class JarvesService : Service(), TaskQueueManager.QueueListener {
         executor = DeviceControlExecutor(this)
         createNotificationChannel()
         TaskQueueManager.instance.addListener(this)
+
+        setupShakeSensor()
+        registerReceivers()
+    }
+
+    private fun setupShakeSensor() {
+        sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
+        val accelerometer = sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+
+        shakeDetector = ShakeDetector {
+            // Trigger Dynamic Island Overlay on shake
+            val intent = Intent(this, JarvesOverlayService::class.java).apply {
+                action = "ACTION_SHOW_LISTENING"
+                putExtra("EXTRA_TEXT", "Shake Triggered! Listening...")
+            }
+            try {
+                startService(intent)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+
+        if (accelerometer != null && shakeDetector != null) {
+            sensorManager?.registerListener(shakeDetector, accelerometer, SensorManager.SENSOR_DELAY_UI)
+        }
+    }
+
+    private fun registerReceivers() {
+        powerStateReceiver = PowerStateReceiver()
+        val powerFilter = IntentFilter().apply {
+            addAction(Intent.ACTION_POWER_CONNECTED)
+            addAction(Intent.ACTION_POWER_DISCONNECTED)
+            addAction(Intent.ACTION_BATTERY_LOW)
+            addAction(Intent.ACTION_BATTERY_CHANGED)
+        }
+        registerReceiver(powerStateReceiver, powerFilter)
+
+        callAnnouncerReceiver = CallAnnouncerReceiver()
+        val callFilter = IntentFilter("android.intent.action.PHONE_STATE")
+        registerReceiver(callAnnouncerReceiver, callFilter)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val notification = buildNotification("JARVES System Active", "Listening for voice & scheduled tasks...")
+        val notification = buildNotification("JARVES Pro Active", "Background listening, Shake & Caller ID active")
         startForeground(NOTIF_ID, notification)
         return START_STICKY
     }
@@ -39,8 +91,8 @@ class JarvesService : Service(), TaskQueueManager.QueueListener {
         val activeTask = tasks.find { it.status == com.jarves.assistant.model.TaskStatus.RUNNING }
             ?: tasks.firstOrNull()
 
-        val title = if (activeTask != null) "Active: ${activeTask.title}" else "JARVES Assistant Active"
-        val sub = "Pending Tasks: $pendingCount | Tap to open JARVES"
+        val title = if (activeTask != null) "Active: ${activeTask.title}" else "JARVES System Active"
+        val sub = "Pending Tasks: $pendingCount | Shake or say 'JARVES'"
 
         val notification = buildNotification(title, sub)
         val notifManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -82,21 +134,28 @@ class JarvesService : Service(), TaskQueueManager.QueueListener {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "JARVES Assistant Background Service",
+                "JARVES Assistant Foreground Service",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Shows active JARVES voice assistant status and pending task queue"
+                description = "Shows active JARVES voice assistant status, shake detector and background services"
             }
             val notifManager = getSystemService(NotificationManager::class.java)
             notifManager?.createNotificationChannel(channel)
         }
     }
 
-    fun getExecutor(): DeviceControlExecutor = executor
-
     override fun onDestroy() {
         super.onDestroy()
         TaskQueueManager.instance.removeListener(this)
+        if (sensorManager != null && shakeDetector != null) {
+            sensorManager?.unregisterListener(shakeDetector)
+        }
+        if (powerStateReceiver != null) {
+            try { unregisterReceiver(powerStateReceiver) } catch (e: Exception) {}
+        }
+        if (callAnnouncerReceiver != null) {
+            try { unregisterReceiver(callAnnouncerReceiver) } catch (e: Exception) {}
+        }
         executor.destroy()
     }
 

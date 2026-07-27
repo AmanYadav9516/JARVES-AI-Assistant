@@ -4,11 +4,14 @@ import android.content.Context
 import android.content.Intent
 import android.database.Cursor
 import android.hardware.camera2.CameraManager
+import android.media.AudioManager
 import android.net.Uri
+import android.os.Build
 import android.provider.AlarmClock
 import android.provider.CalendarContract
 import android.provider.ContactsContract
 import android.provider.MediaStore
+import android.provider.Settings
 import android.speech.tts.TextToSpeech
 import android.telephony.SmsManager
 import android.widget.Toast
@@ -36,10 +39,19 @@ class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitL
     }
 
     fun speak(text: String) {
-        if (isTtsReady) {
-            tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "JARVES_TTS")
+        val prefs = context.getSharedPreferences("jarves_prefs", Context.MODE_PRIVATE)
+        val personality = prefs.getString("ai_personality", "JARVIS_PRO") ?: "JARVIS_PRO"
+
+        val formattedText = when (personality) {
+            "JARVIS_PRO" -> "At your service, Sir. $text"
+            "FRIENDLY_HINDI" -> "नमस्ते! $text"
+            else -> "JARVES System: $text"
         }
-        Toast.makeText(context, "JARVES: $text", Toast.LENGTH_LONG).show()
+
+        if (isTtsReady) {
+            tts?.speak(formattedText, TextToSpeech.QUEUE_FLUSH, null, "JARVES_TTS")
+        }
+        Toast.makeText(context, formattedText, Toast.LENGTH_LONG).show()
     }
 
     fun execute(task: JarvesTask) {
@@ -55,6 +67,8 @@ class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitL
             "ALARM" -> setAlarm(task.detailText)
             "TIMER", "STOPWATCH" -> setTimerOrStopwatch(task.detailText)
             "CALENDAR" -> openCalendar(task.detailText)
+            "VOLUME" -> setVolume(task.target, task.detailText)
+            "BRIGHTNESS" -> setBrightness(task.detailText)
             "SAVE_MEMORY" -> saveLocalMemory(task.target, task.detailText)
             "QUERY_MEMORY" -> queryLocalMemory(task.target)
             "REMINDER" -> createReminder(task.detailText)
@@ -68,12 +82,10 @@ class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitL
         val cleanQuery = contactNameOrNumber.trim()
         speak("Searching contacts for $cleanQuery")
 
-        var foundNumber: String? = null
-
-        if (cleanQuery.matches(Regex("^[0-9+]+$"))) {
-            foundNumber = cleanQuery
+        val foundNumber: String? = if (cleanQuery.matches(Regex("^[0-9+]+$"))) {
+            cleanQuery
         } else {
-            foundNumber = searchContactPhoneNumber(cleanQuery)
+            searchContactPhoneNumber(cleanQuery)
         }
 
         if (!foundNumber.isNullOrEmpty()) {
@@ -90,7 +102,7 @@ class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitL
                 context.startActivity(dialIntent)
             }
         } else {
-            speak("Contact $cleanQuery not found in your phone. Opening phone dialer.")
+            speak("Contact $cleanQuery not found in your phone. Opening dialer.")
             val dialIntent = Intent(Intent.ACTION_DIAL).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
@@ -122,6 +134,50 @@ class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitL
             cursor?.close()
         }
         return null
+    }
+
+    private fun setVolume(mode: String, levelStr: String) {
+        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val level = levelStr.toIntOrNull() ?: 80
+
+        val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        val targetVol = (maxVolume * (level / 100.0f)).toInt()
+
+        if (mode.contains("SILENT", true)) {
+            audioManager.ringerMode = AudioManager.RINGER_MODE_SILENT
+            speak("Ringer set to Silent")
+        } else if (mode.contains("VIBRATE", true)) {
+            audioManager.ringerMode = AudioManager.RINGER_MODE_VIBRATE
+            speak("Ringer set to Vibrate")
+        } else {
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, targetVol, AudioManager.FLAG_SHOW_UI)
+            speak("Media Volume set to $level percent")
+        }
+    }
+
+    private fun setBrightness(levelStr: String) {
+        val level = levelStr.toIntOrNull() ?: 50
+        val targetVal = (255 * (level / 100.0f)).toInt()
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && Settings.System.canWrite(context)) {
+            try {
+                Settings.System.putInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS, targetVal)
+                speak("Screen Brightness set to $level percent")
+            } catch (e: Exception) {
+                speak("Unable to adjust brightness settings")
+            }
+        } else {
+            speak("Write settings permission needed for brightness adjustment")
+            val intent = Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS).apply {
+                data = Uri.parse("package:${context.packageName}")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            try {
+                context.startActivity(intent)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
     }
 
     private fun saveLocalMemory(keyKeyword: String, fullText: String) {
@@ -165,7 +221,7 @@ class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitL
         val intent = Intent(AlarmClock.ACTION_SET_TIMER).apply {
             putExtra(AlarmClock.EXTRA_LENGTH, mins * 60)
             putExtra(AlarmClock.EXTRA_MESSAGE, "JARVES Timer")
-            putExtra(AlarmClock.EXTRA_SKIP_UI, false)
+            putExtra(AlarmClock.EXTRA_SKIP_UI, true)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         try {
@@ -286,7 +342,7 @@ class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitL
             putExtra(AlarmClock.EXTRA_HOUR, hour)
             putExtra(AlarmClock.EXTRA_MINUTES, 0)
             putExtra(AlarmClock.EXTRA_MESSAGE, "JARVES Alarm")
-            putExtra(AlarmClock.EXTRA_SKIP_UI, false)
+            putExtra(AlarmClock.EXTRA_SKIP_UI, true)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         context.startActivity(intent)

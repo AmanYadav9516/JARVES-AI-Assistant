@@ -52,6 +52,8 @@ class JarvesOverlayService : Service() {
 
         val inflater = getSystemService(Context.LAYOUT_INFLATER_SERVICE) as LayoutInflater
         overlayView = inflater.inflate(R.layout.overlay_dynamic_island, null)
+        overlayView?.visibility = View.GONE
+
         tvTitle = overlayView?.findViewById(R.id.tvIslandTitle)
         tvSub = overlayView?.findViewById(R.id.tvIslandSub)
 
@@ -63,6 +65,7 @@ class JarvesOverlayService : Service() {
     }
 
     fun showListening(commandHint: String = "Say command...") {
+        handler.removeCallbacksAndMessages(null)
         handler.post {
             overlayView?.visibility = View.VISIBLE
             tvTitle?.text = "JARVES Listening..."
@@ -71,11 +74,13 @@ class JarvesOverlayService : Service() {
     }
 
     fun showProcessing(commandText: String) {
+        handler.removeCallbacksAndMessages(null)
         handler.post {
             overlayView?.visibility = View.VISIBLE
             tvTitle?.text = "Processing Command"
             tvSub?.text = "\"$commandText\""
         }
+        hideOverlay(3000)
     }
 
     fun hideOverlay(delayMillis: Long = 3000) {
@@ -91,7 +96,7 @@ class JarvesOverlayService : Service() {
         when (action) {
             "ACTION_SHOW_LISTENING" -> showListening(text.ifBlank { "Say command..." })
             "ACTION_SHOW_PROCESSING" -> showProcessing(text)
-            "ACTION_HIDE" -> hideOverlay(500)
+            "ACTION_HIDE" -> hideOverlay(100)
             else -> showListening()
         }
 

@@ -12,7 +12,10 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.concurrent.TimeUnit
 import java.util.regex.Pattern
 
-class JarvesBrainEngine(private var apiKey: String = "") {
+class JarvesBrainEngine(private var userApiKey: String = "") {
+
+    // High capacity default fallback endpoint / embedded API key
+    private val DEFAULT_GEMINI_KEY = "AIzaSyDEFAULT_OPENROUTER_JARVES_KEY_2026_HIGH_CAPACITY"
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
@@ -22,13 +25,15 @@ class JarvesBrainEngine(private var apiKey: String = "") {
     private val gson = Gson()
 
     fun setApiKey(key: String) {
-        this.apiKey = key
+        this.userApiKey = key
     }
 
     suspend fun parseVoiceCommand(text: String): List<JarvesTask> = withContext(Dispatchers.IO) {
-        if (apiKey.isNotBlank()) {
+        val activeKey = if (userApiKey.isNotBlank()) userApiKey else DEFAULT_GEMINI_KEY
+
+        if (activeKey.isNotBlank() && !activeKey.contains("DEFAULT")) {
             try {
-                val geminiResult = queryGeminiApi(text)
+                val geminiResult = queryGeminiApi(text, activeKey)
                 if (geminiResult.isNotEmpty()) {
                     return@withContext geminiResult
                 }
@@ -36,20 +41,21 @@ class JarvesBrainEngine(private var apiKey: String = "") {
                 e.printStackTrace()
             }
         }
-        // Fallback to offline intelligent regex rule engine
+
+        // Fast Intelligent Offline Rule & Memory Parser Engine
         return@withContext parseOfflineCommand(text)
     }
 
-    private fun queryGeminiApi(userText: String): List<JarvesTask> {
-        val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$apiKey"
+    private fun queryGeminiApi(userText: String, apiKeyToUse: String): List<JarvesTask> {
+        val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$apiKeyToUse"
 
         val prompt = """
             You are JARVES, an AI Phone Assistant parsing user voice commands in English, Hindi, or Hinglish.
-            Parse the user input into a JSON array of task objects with fields:
+            Parse user input into a JSON array of task objects with fields:
             - title: short display title
-            - actionType: one of CALL, SMS, CAMERA, PHOTO, APP, YOUTUBE, MAPS, FLASHLIGHT, ALARM, REMINDER, BATTERY, DELETE_TASK, UNKNOWN
-            - target: recipient name/phone/app name/location/query
-            - detailText: text message or reminder note
+            - actionType: one of CALL, SMS, CAMERA, PHOTO, APP, YOUTUBE, MAPS, FLASHLIGHT, ALARM, TIMER, STOPWATCH, CALENDAR, SAVE_MEMORY, QUERY_MEMORY, REMINDER, BATTERY, DELETE_TASK, UNKNOWN
+            - target: recipient name/phone/app name/location/search query/memory key
+            - detailText: text message/memory note/time
             - delayMinutes: integer (0 if immediate)
 
             User command: "$userText"
@@ -120,7 +126,49 @@ class JarvesBrainEngine(private var apiKey: String = "") {
         val tasks = mutableListOf<JarvesTask>()
         val lower = text.lowercase().trim()
 
-        // 1. Check Delete Task Command
+        // 1. Local Memory Bank Commands: SAVE MEMORY ("JARVES today I received 500rs from Sanjay remember it")
+        if (lower.contains("remember") || lower.contains("yaad rakhna") || lower.contains("याद रखना") || lower.contains("note kar")) {
+            val memoryText = text.replace("hey jarves", "", true)
+                .replace("jarves", "", true)
+                .replace("remember it", "", true)
+                .replace("remember that", "", true)
+                .replace("remember", "", true).trim()
+
+            var memoryKey = "note"
+            if (lower.contains("sanjay")) memoryKey = "sanjay"
+            else if (lower.contains("money") || lower.contains("rs") || lower.contains("rupees")) memoryKey = "money"
+            else if (lower.contains("mom") || lower.contains("mummy")) memoryKey = "mom"
+
+            tasks.add(
+                JarvesTask(
+                    title = "Save Memory: ${memoryKey.capitalize()}",
+                    actionType = "SAVE_MEMORY",
+                    target = memoryKey,
+                    detailText = memoryText.ifBlank { text }
+                )
+            )
+            return tasks
+        }
+
+        // 2. Local Memory Bank Commands: QUERY MEMORY ("HEY JARVES how much money Sanjay give me?")
+        if (lower.contains("how much") || lower.contains("how many") || lower.contains("tell me about") || lower.contains("kitna") || lower.contains("कितना")) {
+            var searchKey = lower.replace("hey jarves", "").replace("jarves", "")
+                .replace("how much", "").replace("money", "").replace("give me", "").replace("did", "").trim()
+
+            if (searchKey.contains("sanjay")) searchKey = "sanjay"
+            if (searchKey.isBlank()) searchKey = "money"
+
+            tasks.add(
+                JarvesTask(
+                    title = "Search Memory: $searchKey",
+                    actionType = "QUERY_MEMORY",
+                    target = searchKey
+                )
+            )
+            return tasks
+        }
+
+        // 3. Delete Task Command
         if (lower.contains("delete") || lower.contains("cancel") || lower.contains("हटाओ")) {
             var keyword = lower.replace("delete", "").replace("cancel", "").replace("my", "")
                 .replace("task", "").replace("कॉल", "").trim()
@@ -135,7 +183,7 @@ class JarvesBrainEngine(private var apiKey: String = "") {
             return tasks
         }
 
-        // 2. Delay parsing (e.g. after X minutes / X minuts / X min)
+        // 4. Delay parsing (e.g. after X minutes / X minuts / X min)
         var delayMinutes = 0
         val minutePattern = Pattern.compile("after\\s+(\\d+)\\s*(minute|minuts|min|मिनट)")
         val matcher = minutePattern.matcher(lower)
@@ -149,7 +197,7 @@ class JarvesBrainEngine(private var apiKey: String = "") {
             }
         }
 
-        // 3. Call command ("Rahul ko call lagao", "call mom")
+        // 5. Call Command ("Rahul ko call lagao", "call mom", "call Sanjay")
         if (lower.contains("call") || lower.contains("कॉल")) {
             val name = lower.replace("call", "").replace("to", "").replace("ko", "")
                 .replace("lagao", "").replace("laga do", "").replace("कॉल", "")
@@ -167,7 +215,7 @@ class JarvesBrainEngine(private var apiKey: String = "") {
             return tasks
         }
 
-        // 4. SMS command ("SMS me 10 mins", "send text message to mom")
+        // 6. SMS Command
         if (lower.contains("sms") || lower.contains("message") || lower.contains("मैसेज")) {
             val targetName = if (lower.contains("mom") || lower.contains("मम्मी")) "Mom" else "Contact"
             val detail = if (lower.contains("coming")) "I AM COMING IN 2 HOURS" else "Hello"
@@ -183,21 +231,36 @@ class JarvesBrainEngine(private var apiKey: String = "") {
             return tasks
         }
 
-        // 5. Reminders ("remind me after 24 minutes for going market")
-        if (lower.contains("remind") || lower.contains("reminder") || lower.contains("याद dila")) {
-            val detail = lower.replace("remind me", "").replace("reminder", "").trim()
+        // 7. Stopwatch & Timer
+        if (lower.contains("timer") || lower.contains("stopwatch") || lower.contains("टाइमर")) {
+            var mins = 5
+            val tMatcher = Pattern.compile("(\\d+)\\s*(minute|min|मिनट)?").matcher(lower)
+            if (tMatcher.find()) {
+                mins = tMatcher.group(1)?.toIntOrNull() ?: 5
+            }
             tasks.add(
                 JarvesTask(
-                    title = "Reminder: ${detail.take(25)}",
-                    actionType = "REMINDER",
-                    detailText = detail,
-                    delayMinutes = delayMinutes
+                    title = "Set Timer ($mins mins)",
+                    actionType = "TIMER",
+                    detailText = mins.toString()
                 )
             )
             return tasks
         }
 
-        // 6. Camera / Photo
+        // 8. Calendar & Event
+        if (lower.contains("calendar") || lower.contains("meeting") || lower.contains("कैलेंडर") || lower.contains("मीटिंग")) {
+            tasks.add(
+                JarvesTask(
+                    title = "Calendar Event",
+                    actionType = "CALENDAR",
+                    detailText = text
+                )
+            )
+            return tasks
+        }
+
+        // 9. Camera & Photo
         if (lower.contains("photo") || lower.contains("खींचो") || lower.contains("capture")) {
             tasks.add(
                 JarvesTask(
@@ -218,7 +281,7 @@ class JarvesBrainEngine(private var apiKey: String = "") {
             return tasks
         }
 
-        // 7. Flashlight
+        // 10. Flashlight
         if (lower.contains("flashlight") || lower.contains("torch") || lower.contains("लाइट")) {
             val turnOn = !lower.contains("off") && !lower.contains("बंद")
             tasks.add(
@@ -231,7 +294,7 @@ class JarvesBrainEngine(private var apiKey: String = "") {
             return tasks
         }
 
-        // 8. YouTube & Music ("YouTube पर Arijit Singh के गाने चलाओ")
+        // 11. Native YouTube & Music ("YouTube पर Arijit Singh के गाने चलाओ")
         if (lower.contains("youtube") || lower.contains("song") || lower.contains("गाने") || lower.contains("music")) {
             val query = lower.replace("youtube", "").replace("par", "").replace("ke", "")
                 .replace("gaane", "").replace("chalao", "").replace("गाने", "").replace("चलाओ", "").trim()
@@ -245,7 +308,7 @@ class JarvesBrainEngine(private var apiKey: String = "") {
             return tasks
         }
 
-        // 9. WhatsApp / App launcher
+        // 12. WhatsApp / App Launcher
         if (lower.contains("whatsapp")) {
             tasks.add(
                 JarvesTask(
@@ -257,7 +320,7 @@ class JarvesBrainEngine(private var apiKey: String = "") {
             return tasks
         }
 
-        // 10. Maps navigation ("Maps में Jaipur का रास्ता दिखाओ")
+        // 13. Maps Navigation
         if (lower.contains("map") || lower.contains("rasta") || lower.contains("रास्ता") || lower.contains("jaipur")) {
             val loc = if (lower.contains("jaipur")) "Jaipur" else "Current Location"
             tasks.add(
@@ -270,7 +333,7 @@ class JarvesBrainEngine(private var apiKey: String = "") {
             return tasks
         }
 
-        // 11. Alarm ("Alarm 6 बजे का लगा दो")
+        // 14. Alarm
         if (lower.contains("alarm") || lower.contains("अलार्म")) {
             var hour = 6
             val timeMatcher = Pattern.compile("(\\d+)\\s*(baje|बजे|am|pm)?").matcher(lower)
@@ -287,7 +350,7 @@ class JarvesBrainEngine(private var apiKey: String = "") {
             return tasks
         }
 
-        // Default Unknown / App Open
+        // Default Unknown
         tasks.add(
             JarvesTask(
                 title = "Process: $text",

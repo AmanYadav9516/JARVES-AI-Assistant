@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/containerIsland"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_gravity="top|center_horizontal"
+    android:layout_marginHorizontal="20dp"
+    android:layout_marginTop="36dp"
+    android:background="@drawable/bg_dynamic_island"
+    android:elevation="12dp"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:paddingHorizontal="16dp"
+    android:paddingVertical="10dp">
+
+    <!-- Pulsing Voice Icon -->
+    <ImageView
+        android:id="@+id/imgIslandOrb"
+        android:layout_width="32dp"
+        android:layout_height="32dp"
+        android:src="@drawable/ic_jarves_logo"
+        android:contentDescription="JARVES Listening" />
+
+    <!-- Text Container -->
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:orientation="vertical"
+        android:paddingStart="12dp">
+
+        <TextView
+            android:id="@+id/tvIslandTitle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="JARVES Listening..."
+            android:textColor="#00E5FF"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvIslandSub"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Say command..."
+            android:textColor="#8B949E"
+            android:textSize="12sp" />
+    </LinearLayout>
+
+    <!-- Soundwave animation indicator dots -->
+    <TextView
+        android:id="@+id/tvWaveAnimation"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="🎙️ ⚡"
+        android:textSize="16sp" />
+</LinearLayout>

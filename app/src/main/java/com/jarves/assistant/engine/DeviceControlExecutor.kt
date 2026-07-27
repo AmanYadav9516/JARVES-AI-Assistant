@@ -2,9 +2,12 @@ package com.jarves.assistant.engine
 
 import android.content.Context
 import android.content.Intent
+import android.database.Cursor
 import android.hardware.camera2.CameraManager
 import android.net.Uri
 import android.provider.AlarmClock
+import android.provider.CalendarContract
+import android.provider.ContactsContract
 import android.provider.MediaStore
 import android.speech.tts.TextToSpeech
 import android.telephony.SmsManager
@@ -16,6 +19,7 @@ class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitL
 
     private var tts: TextToSpeech? = null
     private var isTtsReady = false
+    private val memoryManager = JarvesLocalMemoryManager(context)
 
     init {
         tts = TextToSpeech(context, this)
@@ -35,20 +39,24 @@ class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitL
         if (isTtsReady) {
             tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "JARVES_TTS")
         }
-        Toast.makeText(context, "JARVES: $text", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, "JARVES: $text", Toast.LENGTH_LONG).show()
     }
 
     fun execute(task: JarvesTask) {
         when (task.actionType) {
-            "CALL" -> makeCall(task.target)
+            "CALL" -> makeDirectCall(task.target)
             "SMS" -> sendSms(task.target, task.detailText)
             "CAMERA" -> openCamera()
             "PHOTO" -> capturePhoto()
             "FLASHLIGHT" -> toggleFlashlight(task.target == "ON")
             "APP" -> openApp(task.target)
-            "YOUTUBE" -> playYoutube(task.target)
+            "YOUTUBE" -> playNativeYoutube(task.target)
             "MAPS" -> openMaps(task.target)
             "ALARM" -> setAlarm(task.detailText)
+            "TIMER", "STOPWATCH" -> setTimerOrStopwatch(task.detailText)
+            "CALENDAR" -> openCalendar(task.detailText)
+            "SAVE_MEMORY" -> saveLocalMemory(task.target, task.detailText)
+            "QUERY_MEMORY" -> queryLocalMemory(task.target)
             "REMINDER" -> createReminder(task.detailText)
             "DELETE_TASK" -> deleteTask(task.target)
             "BATTERY" -> enableBatterySaver()
@@ -56,18 +64,33 @@ class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitL
         }
     }
 
-    private fun makeCall(contactNameOrNumber: String) {
-        speak("Calling $contactNameOrNumber")
-        try {
-            val intent = if (contactNameOrNumber.matches(Regex("^[0-9+]+$"))) {
-                Intent(Intent.ACTION_CALL, Uri.parse("tel:$contactNameOrNumber"))
-            } else {
-                Intent(Intent.ACTION_DIAL, Uri.parse("tel:"))
+    private fun makeDirectCall(contactNameOrNumber: String) {
+        val cleanQuery = contactNameOrNumber.trim()
+        speak("Searching contacts for $cleanQuery")
+
+        var foundNumber: String? = null
+
+        if (cleanQuery.matches(Regex("^[0-9+]+$"))) {
+            foundNumber = cleanQuery
+        } else {
+            foundNumber = searchContactPhoneNumber(cleanQuery)
+        }
+
+        if (!foundNumber.isNullOrEmpty()) {
+            speak("Calling $cleanQuery")
+            try {
+                val callIntent = Intent(Intent.ACTION_CALL, Uri.parse("tel:$foundNumber")).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(callIntent)
+            } catch (e: Exception) {
+                val dialIntent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$foundNumber")).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(dialIntent)
             }
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            context.startActivity(intent)
-        } catch (e: Exception) {
-            speak("Opening dialer")
+        } else {
+            speak("Contact $cleanQuery not found in your phone. Opening phone dialer.")
             val dialIntent = Intent(Intent.ACTION_DIAL).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
@@ -75,13 +98,108 @@ class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitL
         }
     }
 
+    private fun searchContactPhoneNumber(contactName: String): String? {
+        val uri = ContactsContract.CommonDataKinds.Phone.CONTENT_URI
+        val projection = arrayOf(
+            ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+            ContactsContract.CommonDataKinds.Phone.NUMBER
+        )
+        val selection = "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} LIKE ?"
+        val selectionArgs = arrayOf("%$contactName%")
+
+        var cursor: Cursor? = null
+        try {
+            cursor = context.contentResolver.query(uri, projection, selection, selectionArgs, null)
+            if (cursor != null && cursor.moveToFirst()) {
+                val numberIndex = cursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER)
+                if (numberIndex >= 0) {
+                    return cursor.getString(numberIndex)
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        } finally {
+            cursor?.close()
+        }
+        return null
+    }
+
+    private fun saveLocalMemory(keyKeyword: String, fullText: String) {
+        val resultMsg = memoryManager.saveMemory(keyKeyword, fullText)
+        speak(resultMsg)
+    }
+
+    private fun queryLocalMemory(queryKeyword: String) {
+        val responseText = memoryManager.findMemory(queryKeyword)
+        speak(responseText)
+    }
+
+    private fun playNativeYoutube(query: String) {
+        speak("Opening YouTube App for $query")
+        val youtubePackage = "com.google.android.youtube"
+        val pm = context.packageManager
+        val launchIntent = pm.getLaunchIntentForPackage(youtubePackage)
+
+        if (launchIntent != null) {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("vnd.youtube:results?search_query=" + Uri.encode(query))).apply {
+                setPackage(youtubePackage)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            try {
+                context.startActivity(intent)
+            } catch (e: Exception) {
+                launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(launchIntent)
+            }
+        } else {
+            val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/results?search_query=" + Uri.encode(query))).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(browserIntent)
+        }
+    }
+
+    private fun setTimerOrStopwatch(minutesStr: String) {
+        val mins = minutesStr.toIntOrNull() ?: 5
+        speak("Setting timer for $mins minutes")
+        val intent = Intent(AlarmClock.ACTION_SET_TIMER).apply {
+            putExtra(AlarmClock.EXTRA_LENGTH, mins * 60)
+            putExtra(AlarmClock.EXTRA_MESSAGE, "JARVES Timer")
+            putExtra(AlarmClock.EXTRA_SKIP_UI, false)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        try {
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            val clockIntent = Intent(AlarmClock.ACTION_SHOW_TIMERS).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(clockIntent)
+        }
+    }
+
+    private fun openCalendar(eventTitle: String) {
+        speak("Opening Calendar")
+        val intent = Intent(Intent.ACTION_INSERT).apply {
+            data = CalendarContract.Events.CONTENT_URI
+            putExtra(CalendarContract.Events.TITLE, eventTitle.ifBlank { "JARVES Event" })
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        try {
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
     private fun sendSms(recipient: String, messageText: String) {
         speak("Sending message to $recipient")
         try {
             val smsManager = context.getSystemService(SmsManager::class.java)
-            if (recipient.matches(Regex("^[0-9+]+$"))) {
-                smsManager.sendTextMessage(recipient, null, messageText, null, null)
-                speak("Message sent successfully")
+            val phoneNum = if (recipient.matches(Regex("^[0-9+]+$"))) recipient else searchContactPhoneNumber(recipient)
+            if (!phoneNum.isNullOrEmpty()) {
+                smsManager.sendTextMessage(phoneNum, null, messageText, null, null)
+                speak("Message sent successfully to $recipient")
             } else {
                 val intent = Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:")).apply {
                     putExtra("sms_body", messageText)
@@ -133,7 +251,6 @@ class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitL
             launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(launchIntent)
         } else {
-            // Search or fallback
             val intent = Intent(Intent.ACTION_VIEW, Uri.parse("market://search?q=$appNameOrPackage")).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
@@ -143,14 +260,6 @@ class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitL
                 speak("App not found")
             }
         }
-    }
-
-    private fun playYoutube(query: String) {
-        speak("Searching YouTube for $query")
-        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/results?search_query=$query")).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        context.startActivity(intent)
     }
 
     private fun openMaps(location: String) {
@@ -184,7 +293,7 @@ class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitL
     }
 
     private fun createReminder(reminderText: String) {
-        speak("Reminder set: $reminderText")
+        saveLocalMemory("reminder", reminderText)
     }
 
     private fun deleteTask(keyword: String) {
@@ -197,7 +306,7 @@ class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitL
     }
 
     private fun enableBatterySaver() {
-        speak("Low Battery detected. Please turn on Battery Saver mode.")
+        speak("Low Battery detected. Opening Battery Saver settings.")
         val intent = Intent(android.provider.Settings.ACTION_BATTERY_SAVER_SETTINGS).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }

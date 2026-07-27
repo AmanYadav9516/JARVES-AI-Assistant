@@ -4,8 +4,10 @@ import android.Manifest
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.speech.RecognizerIntent
 import android.view.View
 import android.widget.EditText
@@ -22,9 +24,9 @@ import com.jarves.assistant.engine.DeviceControlExecutor
 import com.jarves.assistant.engine.JarvesBrainEngine
 import com.jarves.assistant.engine.TaskQueueManager
 import com.jarves.assistant.model.JarvesTask
+import com.jarves.assistant.service.JarvesOverlayService
 import com.jarves.assistant.service.JarvesService
 import kotlinx.coroutines.launch
-import java.util.Locale
 
 class MainActivity : AppCompatActivity(), TaskQueueManager.QueueListener {
 
@@ -54,7 +56,7 @@ class MainActivity : AppCompatActivity(), TaskQueueManager.QueueListener {
             if (!isGranted) allGranted = false
         }
         if (allGranted) {
-            Toast.makeText(this, "All permissions granted!", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Permissions granted!", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -72,6 +74,7 @@ class MainActivity : AppCompatActivity(), TaskQueueManager.QueueListener {
         setupRecyclerView()
         setupListeners()
         requestSystemPermissions()
+        checkOverlayPermission()
         startForegroundService()
 
         TaskQueueManager.instance.addListener(this)
@@ -105,14 +108,16 @@ class MainActivity : AppCompatActivity(), TaskQueueManager.QueueListener {
 
         binding.btnPermissions.setOnClickListener {
             requestSystemPermissions()
+            checkOverlayPermission()
         }
     }
 
     private fun launchVoiceInput() {
+        showOverlayListening("Say command...")
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, "hi-IN")
-            putExtra(RecognizerIntent.EXTRA_PROMPT, "Say command to JARVES...")
+            putExtra(RecognizerIntent.EXTRA_PROMPT, "JARVES Listening...")
         }
         try {
             binding.tvStatus.text = getString(R.string.status_listening)
@@ -125,6 +130,7 @@ class MainActivity : AppCompatActivity(), TaskQueueManager.QueueListener {
     private fun processCommandText(commandText: String) {
         binding.tvStatus.text = getString(R.string.status_processing)
         binding.tvSubStatus.text = "\"$commandText\""
+        showOverlayProcessing(commandText)
 
         lifecycleScope.launch {
             val parsedTasks = brainEngine.parseVoiceCommand(commandText)
@@ -148,6 +154,40 @@ class MainActivity : AppCompatActivity(), TaskQueueManager.QueueListener {
         }
     }
 
+    private fun showOverlayListening(hint: String) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && Settings.canDrawOverlays(this)) {
+            val intent = Intent(this, JarvesOverlayService::class.java).apply {
+                action = "ACTION_SHOW_LISTENING"
+                putExtra("EXTRA_TEXT", hint)
+            }
+            startService(intent)
+        }
+    }
+
+    private fun showOverlayProcessing(commandText: String) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && Settings.canDrawOverlays(this)) {
+            val intent = Intent(this, JarvesOverlayService::class.java).apply {
+                action = "ACTION_SHOW_PROCESSING"
+                putExtra("EXTRA_TEXT", commandText)
+            }
+            startService(intent)
+        }
+    }
+
+    private fun checkOverlayPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+            val intent = Intent(
+                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:$packageName")
+            )
+            try {
+                startActivity(intent)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
     private fun showApiKeyDialog() {
         val currentKey = prefs.getString("gemini_api_key", "") ?: ""
         val etKey = EditText(this).apply {
@@ -158,7 +198,7 @@ class MainActivity : AppCompatActivity(), TaskQueueManager.QueueListener {
 
         AlertDialog.Builder(this)
             .setTitle("Google Gemini API Key")
-            .setMessage("Set your Gemini API key for advanced natural voice understanding:")
+            .setMessage("Set custom API key for enhanced AI comprehension:")
             .setView(etKey)
             .setPositiveButton("Save") { _, _ ->
                 val newKey = etKey.text.toString().trim()
@@ -176,7 +216,9 @@ class MainActivity : AppCompatActivity(), TaskQueueManager.QueueListener {
             Manifest.permission.CALL_PHONE,
             Manifest.permission.READ_CONTACTS,
             Manifest.permission.SEND_SMS,
-            Manifest.permission.CAMERA
+            Manifest.permission.CAMERA,
+            Manifest.permission.READ_CALENDAR,
+            Manifest.permission.WRITE_CALENDAR
         )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             required.add(Manifest.permission.POST_NOTIFICATIONS)

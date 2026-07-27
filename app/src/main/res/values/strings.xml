@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">JARVES</string>
+    <string name="jarves_tagline">Your Pro Voice AI Assistant</string>
+    <string name="status_listening">Listening for "JARVES"...</string>
+    <string name="status_idle">JARVES System Ready</string>
+    <string name="status_speaking">JARVES Speaking...</string>
+    <string name="status_processing">Processing Voice Command...</string>
+    <string name="gemini_api_key_prompt">Configure Gemini API Key</string>
+    <string name="task_queue_title">Active Task Queue</string>
+</resources>

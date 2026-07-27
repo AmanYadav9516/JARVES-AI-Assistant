@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="128dp"
+    android:height="128dp"
+    android:viewportWidth="128"
+    android:viewportHeight="128">
+
+    <!-- Dark Shield Background -->
+    <path
+        android:fillColor="#0B0E14"
+        android:pathData="M64,4 L114,24 V64 C114,94 64,124 64,124 C64,124 14,94 14,64 V24 Z" />
+
+    <!-- Cyan Outer Ring -->
+    <path
+        android:strokeColor="#00E5FF"
+        android:strokeWidth="3.5"
+        android:fillColor="#00000000"
+        android:pathData="M64,24 A40,40 0 1,0 64,104 A40,40 0 1,0 64,24 Z" />
+
+    <!-- Glowing Core J Emblem -->
+    <path
+        android:fillColor="#00E5FF"
+        android:pathData="M76,42 H86 V76 C86,88 74,94 64,94 C54,94 44,88 44,78 H54 C54,82 58,85 64,85 C70,85 76,82 76,76 Z" />
+
+    <!-- Core Dot Accent -->
+    <path
+        android:fillColor="#7C4DFF"
+        android:pathData="M64,52 A8,8 0 1,0 64,68 A8,8 0 1,0 64,52 Z" />
+</vector>

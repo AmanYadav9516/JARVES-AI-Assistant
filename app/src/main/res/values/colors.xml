@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bg_black">#07090E</color>
+    <color name="bg_card">#121824</color>
+    <color name="bg_card_border">#1F293D</color>
+    <color name="cyan_accent">#00E5FF</color>
+    <color name="cyan_glow">#3300E5FF</color>
+    <color name="purple_accent">#7C4DFF</color>
+    <color name="text_white">#F0F6FC</color>
+    <color name="text_sub">#8B949E</color>
+    <color name="status_green">#00E676</color>
+    <color name="status_red">#FF5252</color>
+    <color name="status_orange">#FF9100</color>
+</resources>

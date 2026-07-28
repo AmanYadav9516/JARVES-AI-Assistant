@@ -1,5 +1,7 @@
 package com.jarves.assistant.engine
 
+import android.app.AlarmManager
+import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.database.Cursor
@@ -7,6 +9,8 @@ import android.hardware.camera2.CameraManager
 import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.provider.AlarmClock
 import android.provider.CalendarContract
 import android.provider.ContactsContract
@@ -15,7 +19,10 @@ import android.provider.Settings
 import android.speech.tts.TextToSpeech
 import android.telephony.SmsManager
 import android.widget.Toast
+import com.jarves.assistant.MainActivity
 import com.jarves.assistant.model.JarvesTask
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 
 class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitListener {
@@ -23,6 +30,7 @@ class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitL
     private var tts: TextToSpeech? = null
     private var isTtsReady = false
     private val memoryManager = JarvesLocalMemoryManager(context)
+    private val handler = Handler(Looper.getMainLooper())
 
     init {
         tts = TextToSpeech(context, this)
@@ -57,21 +65,24 @@ class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitL
     fun execute(task: JarvesTask) {
         when (task.actionType) {
             "CALL" -> makeDirectCall(task.target)
+            "GET_NUMBER" -> readPhoneNumberAloud(task.target)
             "SMS" -> sendSms(task.target, task.detailText)
             "CAMERA" -> openCamera()
             "PHOTO" -> capturePhoto()
             "FLASHLIGHT" -> toggleFlashlight(task.target == "ON")
+            "SOS" -> triggerSosStrobe()
             "APP" -> openApp(task.target)
             "YOUTUBE" -> playNativeYoutube(task.target)
             "MAPS" -> openMaps(task.target)
-            "ALARM" -> setAlarm(task.detailText)
+            "ALARM" -> setExactAlarm(task.detailText, task.delayMinutes)
             "TIMER", "STOPWATCH" -> setTimerOrStopwatch(task.detailText)
             "CALENDAR" -> openCalendar(task.detailText)
             "VOLUME" -> setVolume(task.target, task.detailText)
             "BRIGHTNESS" -> setBrightness(task.detailText)
-            "SAVE_MEMORY" -> saveLocalMemory(task.target, task.detailText)
+            "SAVE_MEMORY" -> saveLocalMemoryAndKeep(task.target, task.detailText)
             "QUERY_MEMORY" -> queryLocalMemory(task.target)
-            "REMINDER" -> createReminder(task.detailText)
+            "REMINDER" -> createExactReminder(task.detailText, task.delayMinutes)
+            "BRIEFING" -> readMorningBriefing()
             "DELETE_TASK" -> deleteTask(task.target)
             "BATTERY" -> enableBatterySaver()
             else -> speak("Executing ${task.title}")
@@ -102,11 +113,21 @@ class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitL
                 context.startActivity(dialIntent)
             }
         } else {
-            speak("Contact $cleanQuery not found in your phone. Opening dialer.")
+            speak("Contact $cleanQuery not found in your phone contacts.")
             val dialIntent = Intent(Intent.ACTION_DIAL).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             context.startActivity(dialIntent)
+        }
+    }
+
+    private fun readPhoneNumberAloud(contactName: String) {
+        val foundNumber = searchContactPhoneNumber(contactName)
+        if (!foundNumber.isNullOrEmpty()) {
+            val formattedDigits = foundNumber.replace("", " ").trim()
+            speak("$contactName's phone number is $formattedDigits")
+        } else {
+            speak("Sorry, could not find any contact number for $contactName.")
         }
     }
 
@@ -136,10 +157,101 @@ class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitL
         return null
     }
 
+    private fun setExactAlarm(detail: String, delayMinutes: Int) {
+        val mins = if (delayMinutes > 0) delayMinutes else (detail.toIntOrNull() ?: 60)
+        speak("Alarm set for $mins minutes from now.")
+
+        val intent = Intent(AlarmClock.ACTION_SET_ALARM).apply {
+            putExtra(AlarmClock.EXTRA_HOUR, (System.currentTimeMillis() / (1000 * 3600) % 24).toInt())
+            putExtra(AlarmClock.EXTRA_MINUTES, (mins % 60))
+            putExtra(AlarmClock.EXTRA_MESSAGE, "JARVES Wake Up Alarm")
+            putExtra(AlarmClock.EXTRA_SKIP_UI, true)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        try {
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    private fun createExactReminder(reminderText: String, delayMinutes: Int) {
+        val delayMs = if (delayMinutes > 0) delayMinutes * 60 * 1000L else 120 * 60 * 1000L
+        val triggerTimeMs = System.currentTimeMillis() + delayMs
+
+        saveLocalMemoryAndKeep("reminder", reminderText)
+
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            context, System.currentTimeMillis().toInt(), intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerTimeMs, pendingIntent)
+        } else {
+            alarmManager.set(AlarmManager.RTC_WAKEUP, triggerTimeMs, pendingIntent)
+        }
+
+        speak("Reminder set for $reminderText in $delayMinutes minutes.")
+    }
+
+    private fun saveLocalMemoryAndKeep(keyKeyword: String, fullText: String) {
+        val resultMsg = memoryManager.saveMemory(keyKeyword, fullText)
+        speak(resultMsg)
+
+        // Launch / Create Note in Google Keep or Default Notes
+        try {
+            val keepIntent = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_TEXT, fullText)
+                setPackage("com.google.android.keep")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(keepIntent)
+        } catch (e: Exception) {
+            // Fallback generic send to notes
+            val genericIntent = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_TEXT, fullText)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            try {
+                context.startActivity(Intent.createChooser(genericIntent, "Save Note to App").apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                })
+            } catch (ex: Exception) {
+                ex.printStackTrace()
+            }
+        }
+    }
+
+    private fun readMorningBriefing() {
+        val dateStr = SimpleDateFormat("EEEE, MMMM d", Locale.getDefault()).format(Date())
+        val pendingCount = TaskQueueManager.instance.getPendingCount()
+        speak("Good Morning, Sir! Today is $dateStr. You have $pendingCount pending tasks queued in JARVES. All systems are operational.")
+    }
+
+    private fun triggerSosStrobe() {
+        speak("Emergency SOS Strobe activated!")
+        try {
+            val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            val cameraId = cameraManager.cameraIdList[0]
+            for (i in 0..10) {
+                handler.postDelayed({ cameraManager.setTorchMode(cameraId, true) }, i * 300L)
+                handler.postDelayed({ cameraManager.setTorchMode(cameraId, false) }, i * 300L + 150L)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
     private fun setVolume(mode: String, levelStr: String) {
         val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         val level = levelStr.toIntOrNull() ?: 80
-
         val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
         val targetVol = (maxVolume * (level / 100.0f)).toInt()
 
@@ -172,17 +284,8 @@ class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitL
                 data = Uri.parse("package:${context.packageName}")
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
-            try {
-                context.startActivity(intent)
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
+            try { context.startActivity(intent) } catch (e: Exception) {}
         }
-    }
-
-    private fun saveLocalMemory(keyKeyword: String, fullText: String) {
-        val resultMsg = memoryManager.saveMemory(keyKeyword, fullText)
-        speak(resultMsg)
     }
 
     private fun queryLocalMemory(queryKeyword: String) {
@@ -333,23 +436,6 @@ class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitL
             }
             context.startActivity(browserIntent)
         }
-    }
-
-    private fun setAlarm(hourStr: String) {
-        val hour = hourStr.toIntOrNull() ?: 6
-        speak("Setting alarm for $hour AM")
-        val intent = Intent(AlarmClock.ACTION_SET_ALARM).apply {
-            putExtra(AlarmClock.EXTRA_HOUR, hour)
-            putExtra(AlarmClock.EXTRA_MINUTES, 0)
-            putExtra(AlarmClock.EXTRA_MESSAGE, "JARVES Alarm")
-            putExtra(AlarmClock.EXTRA_SKIP_UI, true)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        context.startActivity(intent)
-    }
-
-    private fun createReminder(reminderText: String) {
-        saveLocalMemory("reminder", reminderText)
     }
 
     private fun deleteTask(keyword: String) {

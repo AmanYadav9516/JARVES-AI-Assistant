@@ -57,13 +57,13 @@ class JarvesBrainEngine(private var userApiKey: String = "") {
         val url = "https://openrouter.ai/api/v1/chat/completions"
 
         val systemPrompt = """
-            You are JARVES, an AI Phone Assistant parsing user voice commands in English, Hindi, or Hinglish.
+            You are JARVES, a Super AI Phone Assistant parsing user voice commands in English, Hindi, or Hinglish.
             Parse user input into a JSON array of task objects with fields:
             - title: short display title
-            - actionType: one of CALL, SMS, CAMERA, PHOTO, APP, YOUTUBE, MAPS, FLASHLIGHT, ALARM, TIMER, STOPWATCH, CALENDAR, VOLUME, BRIGHTNESS, SAVE_MEMORY, QUERY_MEMORY, REMINDER, BATTERY, DELETE_TASK, UNKNOWN
+            - actionType: one of CALL, GET_NUMBER, SMS, CAMERA, PHOTO, APP, YOUTUBE, MAPS, FLASHLIGHT, SOS, ALARM, TIMER, STOPWATCH, CALENDAR, VOLUME, BRIGHTNESS, SAVE_MEMORY, QUERY_MEMORY, REMINDER, BRIEFING, BATTERY, DELETE_TASK, UNKNOWN
             - target: recipient name/phone/app name/location/search query/memory key/volume mode
             - detailText: text message/memory note/time/percentage
-            - delayMinutes: integer (0 if immediate)
+            - delayMinutes: integer (calculate duration in minutes if user specifies 2 hours, 180 minutes, etc., 0 if immediate)
 
             User command: "$userText"
             Respond ONLY with a valid JSON array.
@@ -90,7 +90,7 @@ class JarvesBrainEngine(private var userApiKey: String = "") {
             .post(requestBody)
             .addHeader("Authorization", "Bearer $apiKeyToUse")
             .addHeader("HTTP-Referer", "https://github.com/AmanYadav9516/JARVES-AI-Assistant")
-            .addHeader("X-Title", "JARVES AI Assistant")
+            .addHeader("X-Title", "JARVES Super AI Assistant")
             .build()
 
         client.newCall(request).execute().use { response ->
@@ -141,7 +141,56 @@ class JarvesBrainEngine(private var userApiKey: String = "") {
         val tasks = mutableListOf<JarvesTask>()
         val lower = text.lowercase().trim()
 
-        // 1. Volume Control ("Volume 80% karo", "phone ko silent karo")
+        // 1. Morning Briefing
+        if (lower.contains("good morning") || lower.contains("briefing")) {
+            tasks.add(JarvesTask(title = "Morning Briefing", actionType = "BRIEFING"))
+            return tasks
+        }
+
+        // 2. SOS Emergency
+        if (lower.contains("emergency") || lower.contains("sos")) {
+            tasks.add(JarvesTask(title = "Emergency SOS", actionType = "SOS"))
+            return tasks
+        }
+
+        // 3. Get Phone Number Read Aloud ("Rahul ka phone number kya hai?", "What is Mom's number?")
+        if ((lower.contains("number") || lower.contains("नंबर")) && (lower.contains("kya") || lower.contains("what") || lower.contains("batao"))) {
+            var contact = lower.replace("hey jarves", "").replace("jarves", "").replace("ka", "").replace("ki", "")
+                .replace("phone", "").replace("number", "").replace("kya", "").replace("hai", "").replace("batao", "").replace("what", "").replace("is", "").trim()
+            if (contact.isBlank()) contact = "Mom"
+            tasks.add(JarvesTask(title = "Get Number: $contact", actionType = "GET_NUMBER", target = contact))
+            return tasks
+        }
+
+        // 4. Extended Duration Parsing for Alarms & Reminders ("MUJHE 2 GHANTE BAAD ME JGA DENA", "REMINDER AFTER 2 HOURS", "180 MINUT BAAD REMINDER SET KAR DO")
+        var delayMinutes = 0
+        val hourPattern = Pattern.compile("(\\d+)\\s*(ghante|ghanta|hour|hours|घंटे)")
+        val hMatcher = hourPattern.matcher(lower)
+        if (hMatcher.find()) {
+            val hours = hMatcher.group(1)?.toIntOrNull() ?: 2
+            delayMinutes = hours * 60
+        } else {
+            val minutePattern = Pattern.compile("(\\d+)\\s*(minute|minuts|min|मिनट)")
+            val mMatcher = minutePattern.matcher(lower)
+            if (mMatcher.find()) {
+                delayMinutes = mMatcher.group(1)?.toIntOrNull() ?: 0
+            }
+        }
+
+        if (lower.contains("jga") || lower.contains("जगा") || lower.contains("reminder") || lower.contains("याद dila")) {
+            val reminderTitle = text.ifBlank { "Wake Up & Reminder" }
+            tasks.add(
+                JarvesTask(
+                    title = "Reminder ($delayMinutes mins)",
+                    actionType = "REMINDER",
+                    detailText = reminderTitle,
+                    delayMinutes = delayMinutes
+                )
+            )
+            return tasks
+        }
+
+        // 5. Volume Control ("Volume 80% karo", "phone ko silent karo")
         if (lower.contains("volume") || lower.contains("sound") || lower.contains("आवाज़") || lower.contains("silent") || lower.contains("vibrate")) {
             var percent = 80
             val pMatcher = Pattern.compile("(\\d+)").matcher(lower)
@@ -160,7 +209,7 @@ class JarvesBrainEngine(private var userApiKey: String = "") {
             return tasks
         }
 
-        // 2. Brightness Control ("Brightness 50% karo")
+        // 6. Brightness Control ("Brightness 50% karo")
         if (lower.contains("brightness") || lower.contains("लाइट") || lower.contains("रोशनी")) {
             var percent = 50
             val bMatcher = Pattern.compile("(\\d+)").matcher(lower)
@@ -177,7 +226,7 @@ class JarvesBrainEngine(private var userApiKey: String = "") {
             return tasks
         }
 
-        // 3. Local Memory Bank Commands: SAVE MEMORY ("JARVES today I received 500rs from Sanjay remember it")
+        // 7. Local Memory Bank Commands: SAVE MEMORY ("JARVES today I received 500rs from Sanjay remember it")
         if (lower.contains("remember") || lower.contains("yaad rakhna") || lower.contains("याद रखना") || lower.contains("note kar")) {
             val memoryText = text.replace("hey jarves", "", true)
                 .replace("jarves", "", true)
@@ -201,7 +250,7 @@ class JarvesBrainEngine(private var userApiKey: String = "") {
             return tasks
         }
 
-        // 4. Local Memory Bank Commands: QUERY MEMORY ("HEY JARVES how much money Sanjay give me?")
+        // 8. Local Memory Bank Commands: QUERY MEMORY ("HEY JARVES how much money Sanjay give me?")
         if (lower.contains("how much") || lower.contains("how many") || lower.contains("tell me about") || lower.contains("kitna") || lower.contains("कितना")) {
             var searchKey = lower.replace("hey jarves", "").replace("jarves", "")
                 .replace("how much", "").replace("money", "").replace("give me", "").replace("did", "").trim()
@@ -219,7 +268,7 @@ class JarvesBrainEngine(private var userApiKey: String = "") {
             return tasks
         }
 
-        // 5. Delete Task Command
+        // 9. Delete Task Command
         if (lower.contains("delete") || lower.contains("cancel") || lower.contains("हटाओ")) {
             var keyword = lower.replace("delete", "").replace("cancel", "").replace("my", "")
                 .replace("task", "").replace("कॉल", "").trim()
@@ -234,21 +283,7 @@ class JarvesBrainEngine(private var userApiKey: String = "") {
             return tasks
         }
 
-        // 6. Delay parsing (e.g. after X minutes / X minuts / X min)
-        var delayMinutes = 0
-        val minutePattern = Pattern.compile("after\\s+(\\d+)\\s*(minute|minuts|min|मिनट)")
-        val matcher = minutePattern.matcher(lower)
-        if (matcher.find()) {
-            delayMinutes = matcher.group(1)?.toIntOrNull() ?: 0
-        } else {
-            val hindiPattern = Pattern.compile("(\\d+)\\s*(minute|minuts|min|मिनट)\\s*(बाद|baad)")
-            val hMatcher = hindiPattern.matcher(lower)
-            if (hMatcher.find()) {
-                delayMinutes = hMatcher.group(1)?.toIntOrNull() ?: 0
-            }
-        }
-
-        // 7. Call Command ("Rahul ko call lagao", "call mom", "call Sanjay")
+        // 10. Call Command ("Rahul ko call lagao", "call mom", "call Sanjay")
         if (lower.contains("call") || lower.contains("कॉल")) {
             val name = lower.replace("call", "").replace("to", "").replace("ko", "")
                 .replace("lagao", "").replace("laga do", "").replace("कॉल", "")
@@ -266,7 +301,7 @@ class JarvesBrainEngine(private var userApiKey: String = "") {
             return tasks
         }
 
-        // 8. SMS Command
+        // 11. SMS Command
         if (lower.contains("sms") || lower.contains("message") || lower.contains("मैसेज")) {
             val targetName = if (lower.contains("mom") || lower.contains("मम्मी")) "Mom" else "Contact"
             val detail = if (lower.contains("coming")) "I AM COMING IN 2 HOURS" else "Hello"
@@ -282,7 +317,7 @@ class JarvesBrainEngine(private var userApiKey: String = "") {
             return tasks
         }
 
-        // 9. Stopwatch & Timer
+        // 12. Stopwatch & Timer
         if (lower.contains("timer") || lower.contains("stopwatch") || lower.contains("टाइमर")) {
             var mins = 5
             val tMatcher = Pattern.compile("(\\d+)\\s*(minute|min|मिनट)?").matcher(lower)
@@ -299,40 +334,17 @@ class JarvesBrainEngine(private var userApiKey: String = "") {
             return tasks
         }
 
-        // 10. Calendar & Event
-        if (lower.contains("calendar") || lower.contains("meeting") || lower.contains("कैलेंडर") || lower.contains("मीटिंग")) {
-            tasks.add(
-                JarvesTask(
-                    title = "Calendar Event",
-                    actionType = "CALENDAR",
-                    detailText = text
-                )
-            )
-            return tasks
-        }
-
-        // 11. Camera & Photo
+        // 13. Camera & Photo
         if (lower.contains("photo") || lower.contains("खींचो") || lower.contains("capture")) {
-            tasks.add(
-                JarvesTask(
-                    title = "Capture Photo",
-                    actionType = "PHOTO"
-                )
-            )
+            tasks.add(JarvesTask(title = "Capture Photo", actionType = "PHOTO"))
             return tasks
         }
         if (lower.contains("camera") || lower.contains("कैमरा")) {
-            tasks.add(
-                JarvesTask(
-                    title = "Open Camera",
-                    actionType = "CAMERA",
-                    target = "Camera"
-                )
-            )
+            tasks.add(JarvesTask(title = "Open Camera", actionType = "CAMERA", target = "Camera"))
             return tasks
         }
 
-        // 12. Flashlight
+        // 14. Flashlight
         if (lower.contains("flashlight") || lower.contains("torch") || lower.contains("लाइट")) {
             val turnOn = !lower.contains("off") && !lower.contains("बंद")
             tasks.add(
@@ -345,7 +357,7 @@ class JarvesBrainEngine(private var userApiKey: String = "") {
             return tasks
         }
 
-        // 13. Native YouTube & Music ("YouTube पर Arijit Singh के गाने चलाओ")
+        // 15. Native YouTube & Music ("YouTube पर Arijit Singh के गाने चलाओ")
         if (lower.contains("youtube") || lower.contains("song") || lower.contains("गाने") || lower.contains("music")) {
             val query = lower.replace("youtube", "").replace("par", "").replace("ke", "")
                 .replace("gaane", "").replace("chalao", "").replace("गाने", "").replace("चलाओ", "").trim()
@@ -359,57 +371,32 @@ class JarvesBrainEngine(private var userApiKey: String = "") {
             return tasks
         }
 
-        // 14. WhatsApp / App Launcher
+        // 16. WhatsApp / App Launcher
         if (lower.contains("whatsapp")) {
-            tasks.add(
-                JarvesTask(
-                    title = "Open WhatsApp",
-                    actionType = "APP",
-                    target = "com.whatsapp"
-                )
-            )
+            tasks.add(JarvesTask(title = "Open WhatsApp", actionType = "APP", target = "com.whatsapp"))
             return tasks
         }
 
-        // 15. Maps Navigation
+        // 17. Maps Navigation
         if (lower.contains("map") || lower.contains("rasta") || lower.contains("रास्ता") || lower.contains("jaipur")) {
             val loc = if (lower.contains("jaipur")) "Jaipur" else "Current Location"
-            tasks.add(
-                JarvesTask(
-                    title = "Maps: Route to $loc",
-                    actionType = "MAPS",
-                    target = loc
-                )
-            )
+            tasks.add(JarvesTask(title = "Maps: Route to $loc", actionType = "MAPS", target = loc))
             return tasks
         }
 
-        // 16. Alarm
+        // 18. Alarm
         if (lower.contains("alarm") || lower.contains("अलार्म")) {
             var hour = 6
             val timeMatcher = Pattern.compile("(\\d+)\\s*(baje|बजे|am|pm)?").matcher(lower)
             if (timeMatcher.find()) {
                 hour = timeMatcher.group(1)?.toIntOrNull() ?: 6
             }
-            tasks.add(
-                JarvesTask(
-                    title = "Set Alarm for $hour AM",
-                    actionType = "ALARM",
-                    detailText = hour.toString()
-                )
-            )
+            tasks.add(JarvesTask(title = "Set Alarm for $hour AM", actionType = "ALARM", detailText = hour.toString()))
             return tasks
         }
 
         // Default Unknown
-        tasks.add(
-            JarvesTask(
-                title = "Process: $text",
-                actionType = "APP",
-                target = text
-            )
-        )
-
+        tasks.add(JarvesTask(title = "Process: $text", actionType = "APP", target = text))
         return tasks
     }
 }

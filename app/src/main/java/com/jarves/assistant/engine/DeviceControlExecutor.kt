@@ -10,6 +10,8 @@ import android.hardware.camera2.CameraManager
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
@@ -36,6 +38,7 @@ class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitL
     private var isTtsReady = false
     private val memoryManager = JarvesLocalMemoryManager(context)
     private val handler = Handler(Looper.getMainLooper())
+    private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
     init {
         tts = TextToSpeech(context, this)
@@ -61,14 +64,37 @@ class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitL
             else -> "JARVES System: $text"
         }
 
+        requestAudioFocus()
         if (isTtsReady) {
             tts?.speak(formattedText, TextToSpeech.QUEUE_FLUSH, null, "JARVES_TTS")
         }
         Toast.makeText(context, formattedText, Toast.LENGTH_LONG).show()
     }
 
+    private fun requestAudioFocus() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+                    .setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_ASSISTANT)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                            .build()
+                    )
+                    .build()
+                audioManager.requestAudioFocus(focusRequest)
+            } else {
+                @Suppress("DEPRECATION")
+                audioManager.requestAudioFocus(null, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
     fun execute(task: JarvesTask) {
         when (task.actionType) {
+            "CHAT_ANSWER" -> handleMathOrChatAnswer(task.target, task.detailText)
             "CALL" -> makeDirectCall(task.target)
             "GET_NUMBER" -> readPhoneNumberAloud(task.target)
             "SMS" -> sendSms(task.target, task.detailText)
@@ -80,7 +106,7 @@ class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitL
             "CINEMA_MODE" -> activateCinemaMode()
             "OUTDOOR_MODE" -> activateOutdoorMode()
             "DRIVING_MODE" -> toggleDrivingMode(task.target != "OFF")
-            "APP" -> openApp(task.target)
+            "APP" -> openAppSafely(task.target)
             "YOUTUBE" -> playNativeYoutube(task.target)
             "MAPS" -> openMaps(task.target)
             "ALARM" -> setExactAlarm(task.detailText, task.delayMinutes)
@@ -95,6 +121,75 @@ class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitL
             "DELETE_TASK" -> deleteTask(task.target)
             "BATTERY" -> enableBatterySaver()
             else -> speak("Executing ${task.title}")
+        }
+    }
+
+    private fun handleMathOrChatAnswer(targetQuery: String, answerText: String) {
+        if (answerText.isNotBlank()) {
+            speak(answerText)
+        } else {
+            // Evaluates math calculations offline if internet fails
+            val cleanQuery = targetQuery.lowercase().replace("what is", "").replace("value of", "").replace("=", "").trim()
+            val mathResult = evaluateBasicMath(cleanQuery)
+            if (mathResult != null) {
+                speak("The answer to $cleanQuery is $mathResult")
+            } else {
+                speak("I processed $targetQuery, Sir.")
+            }
+        }
+    }
+
+    private fun evaluateBasicMath(expr: String): String? {
+        try {
+            if (expr.contains("+")) {
+                val parts = expr.split("+")
+                val sum = parts.sumOf { it.trim().toDouble() }
+                return if (sum % 1 == 0.0) sum.toLong().toString() else sum.toString()
+            }
+            if (expr.contains("-")) {
+                val parts = expr.split("-")
+                val diff = parts[0].trim().toDouble() - parts[1].trim().toDouble()
+                return if (diff % 1 == 0.0) diff.toLong().toString() else diff.toString()
+            }
+            if (expr.contains("*") || expr.contains("x")) {
+                val parts = expr.split(Regex("[*x]"))
+                val prod = parts[0].trim().toDouble() * parts[1].trim().toDouble()
+                return if (prod % 1 == 0.0) prod.toLong().toString() else prod.toString()
+            }
+            if (expr.contains("/")) {
+                val parts = expr.split("/")
+                val div = parts[0].trim().toDouble() / parts[1].trim().toDouble()
+                return if (div % 1 == 0.0) div.toLong().toString() else div.toString()
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        return null
+    }
+
+    private fun openAppSafely(appNameOrPackage: String) {
+        val lower = appNameOrPackage.lowercase().trim()
+        val targetPackage = when {
+            lower.contains("youtube") -> "com.google.android.youtube"
+            lower.contains("whatsapp") -> "com.whatsapp"
+            lower.contains("chrome") -> "com.android.chrome"
+            lower.contains("instagram") -> "com.instagram.android"
+            lower.contains("camera") || lower.contains("कैमरा") -> "com.android.camera2"
+            lower.contains("clock") || lower.contains("घड़ी") -> "com.google.android.deskclock"
+            lower.contains("settings") || lower.contains("सेटिंग") -> "com.android.settings"
+            else -> appNameOrPackage
+        }
+
+        speak("Opening $appNameOrPackage")
+        val pm = context.packageManager
+        val launchIntent = pm.getLaunchIntentForPackage(targetPackage)
+
+        if (launchIntent != null) {
+            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(launchIntent)
+        } else {
+            // Speak app not found without opening Play Store
+            speak("Sorry Sir, $appNameOrPackage app is not installed on your phone.")
         }
     }
 
@@ -315,7 +410,6 @@ class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitL
     }
 
     private fun setVolume(mode: String, levelStr: String) {
-        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         val level = levelStr.toIntOrNull() ?: 80
         val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
         val targetVol = (maxVolume * (level / 100.0f)).toInt()
@@ -464,25 +558,6 @@ class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitL
             speak(if (turnOn) "Flashlight turned on" else "Flashlight turned off")
         } catch (e: Exception) {
             speak("Unable to control flashlight")
-        }
-    }
-
-    private fun openApp(appNameOrPackage: String) {
-        speak("Opening $appNameOrPackage")
-        val pm = context.packageManager
-        val launchIntent = pm.getLaunchIntentForPackage(appNameOrPackage)
-        if (launchIntent != null) {
-            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            context.startActivity(launchIntent)
-        } else {
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("market://search?q=$appNameOrPackage")).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            try {
-                context.startActivity(intent)
-            } catch (e: Exception) {
-                speak("App not found")
-            }
         }
     }
 

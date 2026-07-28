@@ -10,25 +10,42 @@ import android.content.IntentFilter
 import android.hardware.Sensor
 import android.hardware.SensorManager
 import android.os.Build
+import android.os.Bundle
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import androidx.core.app.NotificationCompat
 import com.jarves.assistant.MainActivity
 import com.jarves.assistant.R
 import com.jarves.assistant.engine.DeviceControlExecutor
+import com.jarves.assistant.engine.JarvesBrainEngine
 import com.jarves.assistant.engine.TaskQueueManager
 import com.jarves.assistant.model.JarvesTask
 import com.jarves.assistant.receiver.CallAnnouncerReceiver
 import com.jarves.assistant.receiver.PowerStateReceiver
 import com.jarves.assistant.sensor.ShakeDetector
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 
 class JarvesService : Service(), TaskQueueManager.QueueListener {
 
     private lateinit var executor: DeviceControlExecutor
+    private lateinit var brainEngine: JarvesBrainEngine
+    private var speechRecognizer: SpeechRecognizer? = null
     private var sensorManager: SensorManager? = null
     private var shakeDetector: ShakeDetector? = null
 
     private var powerStateReceiver: PowerStateReceiver? = null
     private var callAnnouncerReceiver: CallAnnouncerReceiver? = null
+
+    private val serviceJob = Job()
+    private val serviceScope = CoroutineScope(Dispatchers.Main + serviceJob)
+    private val handler = Handler(Looper.getMainLooper())
 
     private val CHANNEL_ID = "jarves_service_channel"
     private val NOTIF_ID = 1001
@@ -36,11 +53,84 @@ class JarvesService : Service(), TaskQueueManager.QueueListener {
     override fun onCreate() {
         super.onCreate()
         executor = DeviceControlExecutor(this)
+        brainEngine = JarvesBrainEngine()
         createNotificationChannel()
         TaskQueueManager.instance.addListener(this)
 
+        setupBackgroundSpeechRecognizer()
         setupShakeSensor()
         registerReceivers()
+    }
+
+    private fun setupBackgroundSpeechRecognizer() {
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) return
+
+        handler.post {
+            try {
+                speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
+                speechRecognizer?.setRecognitionListener(object : RecognitionListener {
+                    override fun onReadyForSpeech(params: Bundle?) {}
+                    override fun onBeginningOfSpeech() {}
+                    override fun onRmsChanged(rmsdB: Float) {}
+                    override fun onBufferReceived(buffer: ByteArray?) {}
+                    override fun onEndOfSpeech() {}
+
+                    override fun onError(error: Int) {
+                        // Continuous background listening loop restart
+                        handler.postDelayed({ restartSpeechRecognizer() }, 1000)
+                    }
+
+                    override fun onResults(results: Bundle?) {
+                        val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                        if (!matches.isNullOrEmpty()) {
+                            val text = matches[0]
+                            handleSpokenCommand(text)
+                        }
+                        handler.postDelayed({ restartSpeechRecognizer() }, 1000)
+                    }
+
+                    override fun onPartialResults(partialResults: Bundle?) {}
+                    override fun onEvent(eventType: Int, params: Bundle?) {}
+                })
+                restartSpeechRecognizer()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    private fun restartSpeechRecognizer() {
+        try {
+            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, packageName)
+                putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+            }
+            speechRecognizer?.startListening(intent)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    private fun handleSpokenCommand(commandText: String) {
+        val lower = commandText.lowercase()
+        if (lower.contains("hey jarves") || lower.contains("jarves") || lower.contains("जार्विस")) {
+            // Show custom Dynamic Island Overlay directly
+            val overlayIntent = Intent(this, JarvesOverlayService::class.java).apply {
+                action = "ACTION_SHOW_PROCESSING"
+                putExtra("EXTRA_TEXT", commandText)
+            }
+            try { startService(overlayIntent) } catch (e: Exception) {}
+
+            serviceScope.launch {
+                val tasks = brainEngine.parseVoiceCommand(commandText)
+                if (tasks.isNotEmpty()) {
+                    for (task in tasks) {
+                        executor.execute(task)
+                    }
+                }
+            }
+        }
     }
 
     private fun setupShakeSensor() {
@@ -48,16 +138,11 @@ class JarvesService : Service(), TaskQueueManager.QueueListener {
         val accelerometer = sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
 
         shakeDetector = ShakeDetector {
-            // Trigger Dynamic Island Overlay on shake
             val intent = Intent(this, JarvesOverlayService::class.java).apply {
                 action = "ACTION_SHOW_LISTENING"
                 putExtra("EXTRA_TEXT", "Shake Triggered! Listening...")
             }
-            try {
-                startService(intent)
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
+            try { startService(intent) } catch (e: Exception) { e.printStackTrace() }
         }
 
         if (accelerometer != null && shakeDetector != null) {
@@ -81,18 +166,17 @@ class JarvesService : Service(), TaskQueueManager.QueueListener {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val notification = buildNotification("JARVES Pro Active", "Background listening, Shake & Caller ID active")
+        val notification = buildNotification("JARVES Super-App Active", "Continuous Background Speech & Shake Active")
         startForeground(NOTIF_ID, notification)
         return START_STICKY
     }
 
     override fun onQueueUpdated(tasks: List<JarvesTask>) {
         val pendingCount = tasks.count { it.status == com.jarves.assistant.model.TaskStatus.PENDING }
-        val activeTask = tasks.find { it.status == com.jarves.assistant.model.TaskStatus.RUNNING }
-            ?: tasks.firstOrNull()
+        val activeTask = tasks.find { it.status == com.jarves.assistant.model.TaskStatus.RUNNING } ?: tasks.firstOrNull()
 
         val title = if (activeTask != null) "Active: ${activeTask.title}" else "JARVES System Active"
-        val sub = "Pending Tasks: $pendingCount | Shake or say 'JARVES'"
+        val sub = "Pending Tasks: $pendingCount | Say 'HEY JARVES'"
 
         val notification = buildNotification(title, sub)
         val notifManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -146,6 +230,8 @@ class JarvesService : Service(), TaskQueueManager.QueueListener {
 
     override fun onDestroy() {
         super.onDestroy()
+        serviceJob.cancel()
+        speechRecognizer?.destroy()
         TaskQueueManager.instance.removeListener(this)
         if (sensorManager != null && shakeDetector != null) {
             sensorManager?.unregisterListener(shakeDetector)

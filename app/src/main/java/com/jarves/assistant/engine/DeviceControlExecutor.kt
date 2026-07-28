@@ -1,14 +1,19 @@
 package com.jarves.assistant.engine
 
+import android.annotation.SuppressLint
 import android.app.AlarmManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.database.Cursor
 import android.hardware.camera2.CameraManager
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
 import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.AlarmClock
@@ -71,6 +76,10 @@ class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitL
             "PHOTO" -> capturePhoto()
             "FLASHLIGHT" -> toggleFlashlight(task.target == "ON")
             "SOS" -> triggerSosStrobe()
+            "GPS_EMERGENCY" -> triggerGpsEmergencyAlert()
+            "CINEMA_MODE" -> activateCinemaMode()
+            "OUTDOOR_MODE" -> activateOutdoorMode()
+            "DRIVING_MODE" -> toggleDrivingMode(task.target != "OFF")
             "APP" -> openApp(task.target)
             "YOUTUBE" -> playNativeYoutube(task.target)
             "MAPS" -> openMaps(task.target)
@@ -86,6 +95,64 @@ class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitL
             "DELETE_TASK" -> deleteTask(task.target)
             "BATTERY" -> enableBatterySaver()
             else -> speak("Executing ${task.title}")
+        }
+    }
+
+    private fun activateCinemaMode() {
+        setBrightness("10")
+        setVolume("SILENT", "0")
+        speak("Cinema Mode Activated. Brightness reduced to 10 percent and ringer set to silent.")
+    }
+
+    private fun activateOutdoorMode() {
+        setBrightness("100")
+        setVolume("MEDIA", "100")
+        speak("Outdoor Mode Activated. Maximum brightness and 100 percent volume set.")
+    }
+
+    private fun toggleDrivingMode(enable: Boolean) {
+        val prefs = context.getSharedPreferences("jarves_prefs", Context.MODE_PRIVATE)
+        prefs.edit().putBoolean("driving_mode_active", enable).apply()
+        if (enable) {
+            speak("Driving Mode Auto-Responder Activated. Incoming calls and messages will receive auto-reply.")
+        } else {
+            speak("Driving Mode Deactivated.")
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun triggerGpsEmergencyAlert() {
+        speak("Emergency Panic Alert triggered! Fetching live GPS location.")
+        try {
+            val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+            val locationListener = object : LocationListener {
+                override fun onLocationChanged(loc: Location) {
+                    val lat = loc.latitude
+                    val lng = loc.longitude
+                    val mapUrl = "https://maps.google.com/?q=$lat,$lng"
+                    val msg = "EMERGENCY ALERT! I need help. My current live location is: $mapUrl - Sent by JARVES AI"
+
+                    val emergencyNumber = searchContactPhoneNumber("Mom") ?: searchContactPhoneNumber("Emergency") ?: "112"
+                    sendSms(emergencyNumber, msg)
+                    speak("Emergency SMS sent with live location to $emergencyNumber")
+                    try { locationManager.removeUpdates(this) } catch (e: Exception) {}
+                }
+                override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
+                override fun onProviderEnabled(provider: String) {}
+                override fun onProviderDisabled(provider: String) {}
+            }
+
+            if (locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+                locationManager.requestSingleUpdate(LocationManager.GPS_PROVIDER, locationListener, null)
+            } else if (locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
+                locationManager.requestSingleUpdate(LocationManager.NETWORK_PROVIDER, locationListener, null)
+            } else {
+                val emergencyNumber = searchContactPhoneNumber("Mom") ?: "112"
+                sendSms(emergencyNumber, "EMERGENCY ALERT! I need help. - Sent by JARVES AI")
+            }
+        } catch (e: Exception) {
+            val emergencyNumber = searchContactPhoneNumber("Mom") ?: "112"
+            sendSms(emergencyNumber, "EMERGENCY ALERT! I need help. - Sent by JARVES AI")
         }
     }
 
@@ -203,7 +270,6 @@ class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitL
         val resultMsg = memoryManager.saveMemory(keyKeyword, fullText)
         speak(resultMsg)
 
-        // Launch / Create Note in Google Keep or Default Notes
         try {
             val keepIntent = Intent(Intent.ACTION_SEND).apply {
                 type = "text/plain"
@@ -213,7 +279,6 @@ class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitL
             }
             context.startActivity(keepIntent)
         } catch (e: Exception) {
-            // Fallback generic send to notes
             val genericIntent = Intent(Intent.ACTION_SEND).apply {
                 type = "text/plain"
                 putExtra(Intent.EXTRA_TEXT, fullText)

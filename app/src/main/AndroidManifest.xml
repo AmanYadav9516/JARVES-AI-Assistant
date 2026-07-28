@@ -95,6 +95,17 @@
         </receiver>
 
         <receiver
+            android:name=".widget.JarvesWidgetProvider"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/jarves_widget_info" />
+        </receiver>
+
+        <receiver
             android:name=".receiver.NotificationActionReceiver"
             android:exported="false" />
 

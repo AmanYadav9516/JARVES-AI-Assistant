@@ -4,7 +4,9 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.database.Cursor
+import android.net.Uri
 import android.provider.ContactsContract
+import android.telephony.SmsManager
 import android.telephony.TelephonyManager
 import com.jarves.assistant.engine.DeviceControlExecutor
 
@@ -19,6 +21,23 @@ class CallAnnouncerReceiver : BroadcastReceiver() {
                 getContactName(context, incomingNumber) ?: incomingNumber
             } else {
                 "Unknown Number"
+            }
+
+            val prefs = context.getSharedPreferences("jarves_prefs", Context.MODE_PRIVATE)
+            val isDrivingMode = prefs.getBoolean("driving_mode_active", false)
+
+            if (isDrivingMode && !incomingNumber.isNullOrEmpty()) {
+                // Auto-reply SMS
+                try {
+                    val smsManager = context.getSystemService(SmsManager::class.java)
+                    smsManager.sendTextMessage(
+                        incomingNumber, null,
+                        "Sir is currently driving, will reply soon. - Sent by JARVES AI",
+                        null, null
+                    )
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
             }
 
             val executor = DeviceControlExecutor(context)

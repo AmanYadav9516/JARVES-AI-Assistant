@@ -94,8 +94,8 @@ class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitL
 
     fun execute(task: JarvesTask) {
         when (task.actionType) {
-            "CHAT_ANSWER" -> handleMathOrChatAnswer(task.target, task.detailText)
             "CALL" -> makeDirectCall(task.target)
+            "CHAT_ANSWER" -> handleMathOrChatAnswer(task.target, task.detailText)
             "GET_NUMBER" -> readPhoneNumberAloud(task.target)
             "SMS" -> sendSms(task.target, task.detailText)
             "CAMERA" -> openCamera()
@@ -124,11 +124,80 @@ class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitL
         }
     }
 
+    private fun makeDirectCall(contactNameOrNumber: String) {
+        val cleanQuery = contactNameOrNumber.trim()
+        speak("Searching contacts to call $cleanQuery")
+
+        val foundNumber: String? = if (cleanQuery.matches(Regex("^[0-9+]+$"))) {
+            cleanQuery
+        } else {
+            searchContactPhoneNumber(cleanQuery)
+        }
+
+        if (!foundNumber.isNullOrEmpty()) {
+            speak("Calling $cleanQuery")
+            try {
+                val callIntent = Intent(Intent.ACTION_CALL, Uri.parse("tel:$foundNumber")).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(callIntent)
+            } catch (e: Exception) {
+                val dialIntent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$foundNumber")).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(dialIntent)
+            }
+        } else {
+            speak("Contact $cleanQuery not found in your phone contacts. Opening Phone Dialer.")
+            val dialIntent = Intent(Intent.ACTION_DIAL).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            try {
+                context.startActivity(dialIntent)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    private fun saveLocalMemoryAndKeep(keyKeyword: String, fullText: String) {
+        val resultMsg = memoryManager.saveMemory(keyKeyword, fullText)
+        speak(resultMsg)
+
+        val keepPackage = "com.google.android.keep"
+        val pm = context.packageManager
+        val launchIntent = pm.getLaunchIntentForPackage(keepPackage)
+
+        if (launchIntent != null) {
+            try {
+                val keepIntent = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_TEXT, fullText)
+                    setPackage(keepPackage)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(keepIntent)
+                speak("Saved note to Google Keep for Google One Cloud sync.")
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        } else {
+            speak("Sir, Google Keep is not installed. Redirecting to Play Store to install Google Keep for 5TB Google One cloud sync.")
+            val marketIntent = Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$keepPackage")).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            try {
+                context.startActivity(marketIntent)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
     private fun handleMathOrChatAnswer(targetQuery: String, answerText: String) {
         if (answerText.isNotBlank()) {
             speak(answerText)
         } else {
-            // Evaluates math calculations offline if internet fails
             val cleanQuery = targetQuery.lowercase().replace("what is", "").replace("value of", "").replace("=", "").trim()
             val mathResult = evaluateBasicMath(cleanQuery)
             if (mathResult != null) {
@@ -188,7 +257,6 @@ class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitL
             launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(launchIntent)
         } else {
-            // Speak app not found without opening Play Store
             speak("Sorry Sir, $appNameOrPackage app is not installed on your phone.")
         }
     }
@@ -248,38 +316,6 @@ class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitL
         } catch (e: Exception) {
             val emergencyNumber = searchContactPhoneNumber("Mom") ?: "112"
             sendSms(emergencyNumber, "EMERGENCY ALERT! I need help. - Sent by JARVES AI")
-        }
-    }
-
-    private fun makeDirectCall(contactNameOrNumber: String) {
-        val cleanQuery = contactNameOrNumber.trim()
-        speak("Searching contacts for $cleanQuery")
-
-        val foundNumber: String? = if (cleanQuery.matches(Regex("^[0-9+]+$"))) {
-            cleanQuery
-        } else {
-            searchContactPhoneNumber(cleanQuery)
-        }
-
-        if (!foundNumber.isNullOrEmpty()) {
-            speak("Calling $cleanQuery")
-            try {
-                val callIntent = Intent(Intent.ACTION_CALL, Uri.parse("tel:$foundNumber")).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                context.startActivity(callIntent)
-            } catch (e: Exception) {
-                val dialIntent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$foundNumber")).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                context.startActivity(dialIntent)
-            }
-        } else {
-            speak("Contact $cleanQuery not found in your phone contacts.")
-            val dialIntent = Intent(Intent.ACTION_DIAL).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            context.startActivity(dialIntent)
         }
     }
 
@@ -359,34 +395,6 @@ class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitL
         }
 
         speak("Reminder set for $reminderText in $delayMinutes minutes.")
-    }
-
-    private fun saveLocalMemoryAndKeep(keyKeyword: String, fullText: String) {
-        val resultMsg = memoryManager.saveMemory(keyKeyword, fullText)
-        speak(resultMsg)
-
-        try {
-            val keepIntent = Intent(Intent.ACTION_SEND).apply {
-                type = "text/plain"
-                putExtra(Intent.EXTRA_TEXT, fullText)
-                setPackage("com.google.android.keep")
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            context.startActivity(keepIntent)
-        } catch (e: Exception) {
-            val genericIntent = Intent(Intent.ACTION_SEND).apply {
-                type = "text/plain"
-                putExtra(Intent.EXTRA_TEXT, fullText)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            try {
-                context.startActivity(Intent.createChooser(genericIntent, "Save Note to App").apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                })
-            } catch (ex: Exception) {
-                ex.printStackTrace()
-            }
-        }
     }
 
     private fun readMorningBriefing() {

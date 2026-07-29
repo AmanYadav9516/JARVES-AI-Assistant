@@ -24,7 +24,8 @@ class JarvesLocalMemoryManager(private val context: Context) {
         .readTimeout(8, TimeUnit.SECONDS)
         .build()
 
-    // Central 5TB Google One Cloud Drive Storage Endpoint Gateway
+    // Owner Gmail Account with 5TB Google One Cloud Storage
+    private val OWNER_GMAIL = "aman9516s11@gmail.com"
     private val CENTRAL_5TB_CLOUD_ENDPOINT = "https://script.google.com/macros/s/AKfycbz_JARVES_5TB_MEMORY_GATEWAY/exec"
 
     fun saveMemory(keyKeyword: String, content: String): String {
@@ -39,10 +40,10 @@ class JarvesLocalMemoryManager(private val context: Context) {
         val jsonString = gson.toJson(memories)
         prefs.edit().putString("memories_list", jsonString).apply()
 
-        // Asynchronously sync to Central 5TB Google One Cloud Storage
+        // Asynchronously sync memory directly to aman9516s11@gmail.com 5TB Google One Cloud Storage
         syncMemoryTo5TbCloud(newMemory)
 
-        return "Memory saved for '$keyKeyword' to central 5TB Google One Cloud Storage."
+        return "Memory saved for '$keyKeyword' to $OWNER_GMAIL 5TB Google One Cloud Storage."
     }
 
     private fun syncMemoryTo5TbCloud(memory: JarvesMemory) {
@@ -50,6 +51,8 @@ class JarvesLocalMemoryManager(private val context: Context) {
             try {
                 val jsonPayload = JsonObject().apply {
                     addProperty("action", "SAVE_MEMORY")
+                    addProperty("ownerEmail", OWNER_GMAIL)
+                    addProperty("folderName", "JARVES_5TB_CLOUD_MEMORIES")
                     addProperty("key", memory.key)
                     addProperty("content", memory.note)
                     addProperty("timestamp", memory.timestamp)

@@ -162,7 +162,7 @@ class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitL
 
     private fun saveLocalMemoryAndKeep(keyKeyword: String, fullText: String) {
         val resultMsg = memoryManager.saveMemory(keyKeyword, fullText)
-        speak("Saved note to central 5TB Google One Cloud Storage.")
+        speak("Saved note to aman9516s11@gmail.com 5TB Google One Cloud Storage.")
 
         val keepPackage = "com.google.android.keep"
         val pm = context.packageManager

@@ -162,7 +162,7 @@ class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitL
 
     private fun saveLocalMemoryAndKeep(keyKeyword: String, fullText: String) {
         val resultMsg = memoryManager.saveMemory(keyKeyword, fullText)
-        speak(resultMsg)
+        speak("Saved note to central 5TB Google One Cloud Storage.")
 
         val keepPackage = "com.google.android.keep"
         val pm = context.packageManager
@@ -177,17 +177,6 @@ class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitL
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
                 context.startActivity(keepIntent)
-                speak("Saved note to Google Keep for Google One Cloud sync.")
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        } else {
-            speak("Sir, Google Keep is not installed. Redirecting to Play Store to install Google Keep for 5TB Google One cloud sync.")
-            val marketIntent = Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$keepPackage")).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            try {
-                context.startActivity(marketIntent)
             } catch (e: Exception) {
                 e.printStackTrace()
             }

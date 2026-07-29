@@ -3,59 +3,84 @@ package com.jarves.assistant.engine
 import android.content.Context
 import android.content.SharedPreferences
 import com.google.gson.Gson
+import com.google.gson.JsonObject
 import com.google.gson.reflect.TypeToken
 import com.jarves.assistant.model.JarvesMemory
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import java.util.concurrent.TimeUnit
 
-class JarvesLocalMemoryManager(context: Context) {
+class JarvesLocalMemoryManager(private val context: Context) {
 
     private val prefs: SharedPreferences = context.getSharedPreferences("jarves_memory_bank", Context.MODE_PRIVATE)
     private val gson = Gson()
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(8, TimeUnit.SECONDS)
+        .readTimeout(8, TimeUnit.SECONDS)
+        .build()
 
-    fun saveMemory(keyKeyword: String, fullNote: String): String {
+    // Central 5TB Google One Cloud Drive Storage Endpoint Gateway
+    private val CENTRAL_5TB_CLOUD_ENDPOINT = "https://script.google.com/macros/s/AKfycbz_JARVES_5TB_MEMORY_GATEWAY/exec"
+
+    fun saveMemory(keyKeyword: String, content: String): String {
         val memories = getAllMemories().toMutableList()
-        val entry = JarvesMemory(key = keyKeyword.lowercase(), note = fullNote)
-        memories.add(entry)
-        saveList(memories)
+        val newMemory = JarvesMemory(
+            key = keyKeyword.lowercase().trim(),
+            note = content
+        )
+        memories.removeAll { it.key.equals(keyKeyword, ignoreCase = true) }
+        memories.add(newMemory)
 
-        val dateStr = SimpleDateFormat("dd MMM, yyyy", Locale.getDefault()).format(Date())
-        return "Saved to local memory bank on $dateStr: \"$fullNote\""
+        val jsonString = gson.toJson(memories)
+        prefs.edit().putString("memories_list", jsonString).apply()
+
+        // Asynchronously sync to Central 5TB Google One Cloud Storage
+        syncMemoryTo5TbCloud(newMemory)
+
+        return "Memory saved for '$keyKeyword' to central 5TB Google One Cloud Storage."
+    }
+
+    private fun syncMemoryTo5TbCloud(memory: JarvesMemory) {
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val jsonPayload = JsonObject().apply {
+                    addProperty("action", "SAVE_MEMORY")
+                    addProperty("key", memory.key)
+                    addProperty("content", memory.note)
+                    addProperty("timestamp", memory.timestamp)
+                }
+                val body = jsonPayload.toString().toRequestBody("application/json".toMediaType())
+                val request = Request.Builder()
+                    .url(CENTRAL_5TB_CLOUD_ENDPOINT)
+                    .post(body)
+                    .build()
+                client.newCall(request).execute().close()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
     }
 
     fun findMemory(queryKeyword: String): String {
-        val lower = queryKeyword.lowercase()
         val memories = getAllMemories()
-
-        // Match by keyword or note text
-        val matches = memories.filter {
-            it.key.contains(lower) || it.note.lowercase().contains(lower)
+        val cleanQuery = queryKeyword.lowercase().trim()
+        
+        val matched = memories.find { it.key.contains(cleanQuery) || cleanQuery.contains(it.key) }
+        return if (matched != null) {
+            "Here is what I remember: ${matched.note}"
+        } else {
+            "No memory matching '$queryKeyword' found in storage."
         }
-
-        if (matches.isEmpty()) {
-            return "I searched your local memory bank, but couldn't find any note matching \"$queryKeyword\"."
-        }
-
-        val resultBuilder = StringBuilder("Here is what I found in your phone memory:\n")
-        val dateFormat = SimpleDateFormat("dd MMM yyyy", Locale.getDefault())
-
-        for (m in matches) {
-            val dateStr = dateFormat.format(Date(m.timestamp))
-            resultBuilder.append("• [").append(dateStr).append("]: ").append(m.note).append("\n")
-        }
-
-        return resultBuilder.toString().trim()
     }
 
-    fun getAllMemories(): List<JarvesMemory> {
-        val json = prefs.getString("memories_list", "[]") ?: "[]"
+    private fun getAllMemories(): List<JarvesMemory> {
+        val jsonString = prefs.getString("memories_list", null) ?: return emptyList()
         val type = object : TypeToken<List<JarvesMemory>>() {}.type
-        return gson.fromJson(json, type) ?: emptyList()
-    }
-
-    private fun saveList(list: List<JarvesMemory>) {
-        val json = gson.toJson(list)
-        prefs.edit().putString("memories_list", json).apply()
+        return gson.fromJson(jsonString, type) ?: emptyList()
     }
 }

@@ -18,6 +18,7 @@ import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import com.jarves.assistant.MainActivity
 import com.jarves.assistant.R
 import com.jarves.assistant.engine.DeviceControlExecutor
@@ -46,6 +47,7 @@ class JarvesService : Service(), TaskQueueManager.QueueListener {
     private val serviceJob = Job()
     private val serviceScope = CoroutineScope(Dispatchers.Main + serviceJob)
     private val handler = Handler(Looper.getMainLooper())
+    private var isListeningActive = false
 
     private val CHANNEL_ID = "jarves_service_channel"
     private val NOTIF_ID = 1001
@@ -59,7 +61,7 @@ class JarvesService : Service(), TaskQueueManager.QueueListener {
 
         setupBackgroundSpeechRecognizer()
         setupShakeSensor()
-        registerReceivers()
+        registerReceiversSafely()
     }
 
     private fun setupBackgroundSpeechRecognizer() {
@@ -69,24 +71,29 @@ class JarvesService : Service(), TaskQueueManager.QueueListener {
             try {
                 speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
                 speechRecognizer?.setRecognitionListener(object : RecognitionListener {
-                    override fun onReadyForSpeech(params: Bundle?) {}
+                    override fun onReadyForSpeech(params: Bundle?) {
+                        isListeningActive = true
+                    }
                     override fun onBeginningOfSpeech() {}
                     override fun onRmsChanged(rmsdB: Float) {}
                     override fun onBufferReceived(buffer: ByteArray?) {}
-                    override fun onEndOfSpeech() {}
+                    override fun onEndOfSpeech() {
+                        isListeningActive = false
+                    }
 
                     override fun onError(error: Int) {
-                        // Continuous background listening loop restart
-                        handler.postDelayed({ restartSpeechRecognizer() }, 1000)
+                        isListeningActive = false
+                        handler.postDelayed({ restartSpeechRecognizer() }, 1500)
                     }
 
                     override fun onResults(results: Bundle?) {
+                        isListeningActive = false
                         val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                         if (!matches.isNullOrEmpty()) {
                             val text = matches[0]
                             handleSpokenCommand(text)
                         }
-                        handler.postDelayed({ restartSpeechRecognizer() }, 1000)
+                        handler.postDelayed({ restartSpeechRecognizer() }, 1500)
                     }
 
                     override fun onPartialResults(partialResults: Bundle?) {}
@@ -100,6 +107,7 @@ class JarvesService : Service(), TaskQueueManager.QueueListener {
     }
 
     private fun restartSpeechRecognizer() {
+        if (isListeningActive) return
         try {
             val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
@@ -115,7 +123,6 @@ class JarvesService : Service(), TaskQueueManager.QueueListener {
     private fun handleSpokenCommand(commandText: String) {
         val lower = commandText.lowercase()
         if (lower.contains("hey jarves") || lower.contains("jarves") || lower.contains("जार्विस")) {
-            // Show custom Dynamic Island Overlay directly
             val overlayIntent = Intent(this, JarvesOverlayService::class.java).apply {
                 action = "ACTION_SHOW_PROCESSING"
                 putExtra("EXTRA_TEXT", commandText)
@@ -150,7 +157,7 @@ class JarvesService : Service(), TaskQueueManager.QueueListener {
         }
     }
 
-    private fun registerReceivers() {
+    private fun registerReceiversSafely() {
         powerStateReceiver = PowerStateReceiver()
         val powerFilter = IntentFilter().apply {
             addAction(Intent.ACTION_POWER_CONNECTED)
@@ -158,11 +165,11 @@ class JarvesService : Service(), TaskQueueManager.QueueListener {
             addAction(Intent.ACTION_BATTERY_LOW)
             addAction(Intent.ACTION_BATTERY_CHANGED)
         }
-        registerReceiver(powerStateReceiver, powerFilter)
+        ContextCompat.registerReceiver(this, powerStateReceiver, powerFilter, ContextCompat.RECEIVER_EXPORTED)
 
         callAnnouncerReceiver = CallAnnouncerReceiver()
         val callFilter = IntentFilter("android.intent.action.PHONE_STATE")
-        registerReceiver(callAnnouncerReceiver, callFilter)
+        ContextCompat.registerReceiver(this, callAnnouncerReceiver, callFilter, ContextCompat.RECEIVER_EXPORTED)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {

@@ -71,6 +71,8 @@ class JarvesOverlayService : Service() {
             tvTitle?.text = "JARVES Listening..."
             tvSub?.text = commandHint
         }
+        // 5-second silence auto-hide timer if no command is spoken
+        hideOverlay(5000)
     }
 
     fun showProcessing(commandText: String) {
@@ -80,10 +82,12 @@ class JarvesOverlayService : Service() {
             tvTitle?.text = "Processing Command"
             tvSub?.text = "\"$commandText\""
         }
-        hideOverlay(3000)
+        // Auto-collapses 5 seconds after speech is processed
+        hideOverlay(5000)
     }
 
-    fun hideOverlay(delayMillis: Long = 3000) {
+    fun hideOverlay(delayMillis: Long = 5000) {
+        handler.removeCallbacksAndMessages(null)
         handler.postDelayed({
             overlayView?.visibility = View.GONE
         }, delayMillis)

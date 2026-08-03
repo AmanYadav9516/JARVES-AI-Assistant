@@ -7,36 +7,41 @@ import android.os.BatteryManager
 import com.jarves.assistant.engine.DeviceControlExecutor
 
 class PowerStateReceiver : BroadcastReceiver() {
-    override fun onReceive(context: Context?, intent: Intent?) {
-        if (context == null || intent == null) return
 
+    private var lastAlertTime = 0L
+
+    override fun onReceive(context: Context, intent: Intent) {
+        val action = intent.action ?: return
         val executor = DeviceControlExecutor(context)
-        when (intent.action) {
+        val currentTime = System.currentTimeMillis()
+
+        when (action) {
             Intent.ACTION_POWER_CONNECTED -> {
-                executor.speak("Charging Started, Sir.")
+                executor.speak("Power Cable Connected. Charging Started.")
             }
             Intent.ACTION_POWER_DISCONNECTED -> {
-                executor.speak("Charger Disconnected.")
+                executor.speak("Power Cable Disconnected.")
             }
             Intent.ACTION_BATTERY_LOW -> {
-                executor.speak("Warning Sir! Battery is below 15 percent. Enabling battery saver.")
+                executor.speak("Warning Sir! Battery level is low. Please connect charger.")
             }
             Intent.ACTION_BATTERY_CHANGED -> {
+                // Throttle battery change checks to once every 2 minutes
+                if (currentTime - lastAlertTime < 120000L) return
+
+                val rawTemp = intent.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1)
+                val tempCelsius = if (rawTemp > 0) rawTemp / 10.0f else 0.0f
                 val status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
-                val isFull = status == BatteryManager.BATTERY_STATUS_FULL
                 val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
                 val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
-                val pct = level * 100 / scale.toFloat()
+                val pct = if (level >= 0 && scale > 0) (level * 100 / scale.toFloat()).toInt() else 0
 
-                // Temperature check (EXTRA_TEMPERATURE in tenths of a degree Celsius)
-                val tempTenths = intent.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1)
-                val tempC = tempTenths / 10.0f
-                if (tempC > 45.0f) {
-                    executor.speak("Warning Sir! Battery temperature is high: ${tempC.toInt()} degrees Celsius.")
-                }
-
-                if (isFull || pct >= 100.0f) {
-                    executor.speak("Full Charge! Please unplug charger, Sir.")
+                if (tempCelsius >= 45.0f) {
+                    lastAlertTime = currentTime
+                    executor.speak("Warning! Battery temperature high at ${tempCelsius} degrees Celsius. Unplug charger.")
+                } else if (status == BatteryManager.BATTERY_STATUS_FULL || pct >= 100) {
+                    lastAlertTime = currentTime
+                    executor.speak("Battery 100 percent fully charged, Sir. Please unplug charger.")
                 }
             }
         }

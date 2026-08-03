@@ -106,7 +106,7 @@ class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitL
             "CINEMA_MODE" -> activateCinemaMode()
             "OUTDOOR_MODE" -> activateOutdoorMode()
             "DRIVING_MODE" -> toggleDrivingMode(task.target != "OFF")
-            "APP" -> openAppSafely(task.target)
+            "APP" -> openAppUniversal(task.target)
             "YOUTUBE" -> playNativeYoutube(task.target)
             "MAPS" -> openMaps(task.target)
             "ALARM" -> setExactAlarm(task.detailText, task.delayMinutes)
@@ -122,6 +122,64 @@ class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitL
             "BATTERY" -> enableBatterySaver()
             else -> speak("Executing ${task.title}")
         }
+    }
+
+    private fun openAppUniversal(appNameOrQuery: String) {
+        val cleanQuery = appNameOrQuery.lowercase().trim()
+        speak("Opening $appNameOrQuery")
+
+        val pm = context.packageManager
+
+        // 1. Direct Hardcoded Popular App Map
+        val directPackage = when {
+            cleanQuery.contains("youtube") -> "com.google.android.youtube"
+            cleanQuery.contains("whatsapp") -> "com.whatsapp"
+            cleanQuery.contains("chrome") -> "com.android.chrome"
+            cleanQuery.contains("instagram") -> "com.instagram.android"
+            cleanQuery.contains("facebook") -> "com.facebook.katana"
+            cleanQuery.contains("snapchat") -> "com.snapchat.android"
+            cleanQuery.contains("camera") || cleanQuery.contains("कैमरा") -> "com.android.camera2"
+            cleanQuery.contains("clock") || cleanQuery.contains("घड़ी") -> "com.google.android.deskclock"
+            cleanQuery.contains("settings") || cleanQuery.contains("सेटिंग") -> "com.android.settings"
+            cleanQuery.contains("bgmi") -> "com.pubg.imobile"
+            cleanQuery.contains("free fire") -> "com.dts.freefireth"
+            cleanQuery.contains("paytm") -> "net.one97.paytm"
+            cleanQuery.contains("phonepe") -> "com.phonepe.app"
+            else -> null
+        }
+
+        if (directPackage != null) {
+            val launchIntent = pm.getLaunchIntentForPackage(directPackage)
+            if (launchIntent != null) {
+                launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(launchIntent)
+                return
+            }
+        }
+
+        // 2. Dynamic Installed Package Scanner
+        try {
+            val mainIntent = Intent(Intent.ACTION_MAIN, null).apply {
+                addCategory(Intent.CATEGORY_LAUNCHER)
+            }
+            val resolveInfos = pm.queryIntentActivities(mainIntent, 0)
+            for (ri in resolveInfos) {
+                val label = ri.loadLabel(pm).toString().lowercase()
+                if (label.contains(cleanQuery) || cleanQuery.contains(label)) {
+                    val packageName = ri.activityInfo.packageName
+                    val launchIntent = pm.getLaunchIntentForPackage(packageName)
+                    if (launchIntent != null) {
+                        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        context.startActivity(launchIntent)
+                        return
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        speak("Sorry Sir, $appNameOrQuery app is not installed on your phone.")
     }
 
     private fun makeDirectCall(contactNameOrNumber: String) {
@@ -161,7 +219,7 @@ class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitL
     }
 
     private fun saveLocalMemoryAndKeep(keyKeyword: String, fullText: String) {
-        val resultMsg = memoryManager.saveMemory(keyKeyword, fullText)
+        memoryManager.saveMemory(keyKeyword, fullText)
         speak("Saved note to aman9516s11@gmail.com 5TB Google One Cloud Storage.")
 
         val keepPackage = "com.google.android.keep"
@@ -223,31 +281,6 @@ class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitL
             e.printStackTrace()
         }
         return null
-    }
-
-    private fun openAppSafely(appNameOrPackage: String) {
-        val lower = appNameOrPackage.lowercase().trim()
-        val targetPackage = when {
-            lower.contains("youtube") -> "com.google.android.youtube"
-            lower.contains("whatsapp") -> "com.whatsapp"
-            lower.contains("chrome") -> "com.android.chrome"
-            lower.contains("instagram") -> "com.instagram.android"
-            lower.contains("camera") || lower.contains("कैमरा") -> "com.android.camera2"
-            lower.contains("clock") || lower.contains("घड़ी") -> "com.google.android.deskclock"
-            lower.contains("settings") || lower.contains("सेटिंग") -> "com.android.settings"
-            else -> appNameOrPackage
-        }
-
-        speak("Opening $appNameOrPackage")
-        val pm = context.packageManager
-        val launchIntent = pm.getLaunchIntentForPackage(targetPackage)
-
-        if (launchIntent != null) {
-            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            context.startActivity(launchIntent)
-        } else {
-            speak("Sorry Sir, $appNameOrPackage app is not installed on your phone.")
-        }
     }
 
     private fun activateCinemaMode() {
@@ -377,7 +410,13 @@ class DeviceControlExecutor(private val context: Context) : TextToSpeech.OnInitL
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (alarmManager.canScheduleExactAlarms()) {
+                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerTimeMs, pendingIntent)
+            } else {
+                alarmManager.set(AlarmManager.RTC_WAKEUP, triggerTimeMs, pendingIntent)
+            }
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerTimeMs, pendingIntent)
         } else {
             alarmManager.set(AlarmManager.RTC_WAKEUP, triggerTimeMs, pendingIntent)
